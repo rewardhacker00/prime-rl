@@ -68,72 +68,6 @@ def validate_schema_pa_file(file: Path):
         return False
 
 
-def _get_dataset_from_files_step(
-    step_count: int, path: Path, timeout: float, batch_size: int, ignore_zero_advantages: bool, use_stable_file: bool
-) -> ds.Dataset:
-    """Get all the files for a given step. Waits until the step is created which is indicated by the stable file."""
-    logger = get_logger()
-    step_path = path / f"step_{step_count}"
-
-    start_time = time.time()
-
-    worker_info = torch.utils.data.get_worker_info()
-    worker_id = worker_info.id if worker_info is not None else 0
-
-    wait_count = 0
-
-    while True:
-        files = list(step_path.glob("*.parquet"))
-        if envs.TRAINING_ENABLE_ACCEPTED_CHECK:
-            accepted_flags = set(i.stem for i in step_path.glob("accepted/*.parquet"))
-            files = [i for i in files if i.stem in accepted_flags]
-
-        rows = 0
-
-        if len(files) > 0:
-            try:
-                for file in files:
-                    if not validate_schema_pa_file(file):
-                        raise ValueError(f"Schema of file {file} is not the same as the schema of the pa_schema")
-
-                dataset = ds.dataset(files, format="parquet")
-
-                if ignore_zero_advantages:
-                    dataset = dataset.filter(ds.field("advantages") != 0)
-
-                rows = dataset.count_rows()
-            except Exception as e:
-                logger.warning(f"Error loading dataset for step {step_count}: {e}, files: {files}")
-                rows = 0
-
-            if rows >= batch_size:
-                logger.info(f"Dataset for step {step_count} has enough samples. rows: {rows} and {len(files)} files")
-
-                if use_stable_file:
-                    stable_file = step_path / STABLE_FILE
-                    if stable_file.exists():
-                        logger.info(f"Stable file {stable_file} exists for step {step_count}, returning dataset")
-                        return dataset
-                else:
-                    return dataset
-
-        if time.time() - start_time > timeout:
-            logger.info("raising timeout")
-            raise TimeoutError(f"Timeout waiting for step {step_count} to be created")
-
-        if wait_count % 600 == 0:  # log every 5 minutes
-            logger.info(
-                f"[data_worker:{worker_id}] Waiting for {step_path} to have enough samples. len(files): {len(files)}, Current rows: {rows}, target: {batch_size}"
-            )
-            if use_stable_file:
-                stable_file = step_path / STABLE_FILE
-                if not stable_file.exists():
-                    logger.info(f"Stable file {stable_file} does not exist for step {step_count}, waiting for it to be created")
-
-        wait_count += 1
-        time.sleep(0.5)
-
-
 def _should_skip_index(index: int, world_size: int, rank: int, num_workers: int, workers_id: int) -> bool:
     """
     This function is used to skip the index if it is not the responsibility of the current worker.
@@ -174,40 +108,24 @@ class ParquetDataset(IterableDataset):
     def __init__(
         self,
         path: Path,
-        batch_size: int,
-        timeout: float,
         step_count_init: int,
-        ignore_zero_advantages: bool,
         pq_read_bs: int = 64,
-        use_stable_file: bool = False,
     ):
         self._logger = get_logger()
         self._path = path
-        self._batch_size = batch_size
         self._pq_read_bs = pq_read_bs
 
         self._world_info = get_world_info()
 
         self._step_count = step_count_init - 1  # we immediately bump the step count by one later
-        self._timeout = timeout
 
-        self._ignore_zero_advantages = ignore_zero_advantages
 
-        self._use_stable_file = use_stable_file
 
     def __iter__(self) -> Generator[DatasetOutput, Any, None]:
         worker_info = torch.utils.data.get_worker_info()
         worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
 
-        assert self._batch_size % (self._world_info.world_size * worker_info.num_workers) == 0, (
-            "Batch size must be divisible by the number of workers time the world size"
-        )
-        # this assert should never be triggered because we check for it in the top config level. Keep it here for sanity
-
-        target_sample_count_per_batch = self._batch_size // (self._world_info.world_size * worker_info.num_workers)
-
-        self._logger.info(f"num_workers: {num_workers}, target_sample_count_per_batch: {target_sample_count_per_batch}")
 
         while True:
             self._step_count += 1
@@ -216,9 +134,14 @@ class ParquetDataset(IterableDataset):
 
             self._logger.debug(f"Data processing step {self._step_count}")
 
-            dataset = _get_dataset_from_files_step(
-                self._step_count, self._path, self._timeout, self._batch_size, self._ignore_zero_advantages, self._use_stable_file
-            )
+            file = self._path / f"step_{self._step_count}.parquet"
+            while not file.exists():
+                time.sleep(0.1)
+
+            if not validate_schema_pa_file(file):
+                raise ValueError(f"Schema of file {file} is not the same as the schema of the pa_schema")
+
+            dataset = ds.dataset(file, format="parquet")
 
             required_columns = [
                 "input_tokens",
@@ -232,60 +155,42 @@ class ParquetDataset(IterableDataset):
             scanner = dataset.scanner(columns=required_columns, batch_size=self._pq_read_bs)
             counter = 0
 
-            for j, batch in enumerate(scanner.to_batches()):
-                if all(col in batch.column_names for col in required_columns):
-                    for i in range(len(batch["input_tokens"])):
-                        counter += 1
-                        if _should_skip_index(
-                            index=counter,
-                            world_size=self._world_info.world_size,
-                            rank=self._world_info.rank,
-                            num_workers=num_workers,
-                            workers_id=worker_id,
-                        ):
-                            continue
+            for batch in scanner.to_batches():
+                for i in range(len(batch["input_tokens"])):
+                    counter += 1
+                    if _should_skip_index(
+                        index=counter,
+                        world_size=self._world_info.world_size,
+                        rank=self._world_info.rank,
+                        num_workers=num_workers,
+                        workers_id=worker_id,
+                    ):
+                        continue
 
-                        try:
-                            input_ids = torch.tensor(batch["input_tokens"][i].as_py())
-                            output_ids = torch.tensor(batch["output_tokens"][i].as_py())
+                    input_ids = torch.tensor(batch["input_tokens"][i].as_py())
+                    output_ids = torch.tensor(batch["output_tokens"][i].as_py())
 
-                            ids = torch.cat([input_ids, output_ids], dim=0)
-                            loss_mask = torch.cat([torch.zeros(len(input_ids)), torch.ones(len(output_ids))], dim=0).int()
+                    ids = torch.cat([input_ids, output_ids], dim=0)
+                    loss_mask = torch.cat([torch.zeros(len(input_ids)), torch.ones(len(output_ids))], dim=0).int()
 
-                            adv_value = batch["advantages"][i].as_py()
-                            reward_value = batch["rewards"][i].as_py()
+                    adv_value = batch["advantages"][i].as_py()
 
-                            adv = torch.tensor([adv_value] * len(ids))  # advantage
+                    adv = torch.tensor([adv_value] * len(ids))  # advantage
 
-                            input_logprobs = torch.tensor(batch["input_logprobs"][i].as_py())
-                            output_logprobs = torch.tensor(batch["output_logprobs"][i].as_py())
-                            # Concatenate and remove the first token (BOS)
-                            logprobs = torch.cat([input_logprobs, output_logprobs], dim=0)
-                            assert logprobs.shape == ids.shape, f"logprobs: {logprobs.shape} should be the same as ids: {ids.shape}"
+                    input_logprobs = torch.tensor(batch["input_logprobs"][i].as_py())
+                    output_logprobs = torch.tensor(batch["output_logprobs"][i].as_py())
+                    # Concatenate and remove the first token (BOS)
+                    logprobs = torch.cat([input_logprobs, output_logprobs], dim=0)
+                    assert logprobs.shape == ids.shape, f"logprobs: {logprobs.shape} should be the same as ids: {ids.shape}"
 
-                            data = {
-                                "input_ids": ids,
-                                "advantages": adv,
-                                "loss_mask": loss_mask,
-                                "logprobs": logprobs,
-                                "temperature": batch["temperature"][i].as_py(),
-                            }
-
-                        except Exception as e:
-                            self._logger.warning(f"Error processing row {counter} sample {sample_count}: {str(e)}")
-                            data = None
-
-                        if data is not None:
-                            sample_count += 1
-                            yield data
-
-                        if sample_count >= target_sample_count_per_batch:
-                            break
-                else:
-                    self._logger.warning(f"Batch {j} does not have the required columns")
-
-                if sample_count >= target_sample_count_per_batch:
-                    break
+                    data = {
+                        "input_ids": ids,
+                        "advantages": adv,
+                        "loss_mask": loss_mask,
+                        "logprobs": logprobs,
+                        "temperature": batch["temperature"][i].as_py(),
+                    }
+                    yield data
 
 
 def no_collate(batch: list[DatasetOutput]) -> list[DatasetOutput]:
@@ -311,16 +216,12 @@ def get_dataloader(
         train_dataset = ParquetDataset(
             Path(path),
             batch_size,
-            data_config.timeout,
             step_count_init,
-            data_config.ignore_zero_advantages,
-            use_stable_file=use_stable_file,
         )
 
     loader = DataLoader(
         train_dataset,
         batch_size=local_batch_size,
-        num_workers=data_config.num_workers,
         collate_fn=no_collate,
     )
     return loader

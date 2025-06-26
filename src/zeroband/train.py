@@ -40,16 +40,12 @@ from zeroband.utils.pydantic_config import parse_argv
 from zeroband.utils.utils import clean_exit
 
 
-def get_local_batch_size(batch_size: int, micro_bs: int, data_workers: int, world_info: WorldInfo) -> int:
+def get_local_batch_size(batch_size: int, micro_bs: int, world_info: WorldInfo) -> int:
     assert batch_size % world_info.world_size == 0
     batch_size = batch_size // world_info.world_size
 
     assert batch_size % micro_bs == 0, str(
         f"The micro batch size ({micro_bs}) must divide the number of samples on each GPU ({batch_size})"
-    )
-
-    assert batch_size % data_workers == 0, str(
-        f"The batch size ({batch_size}) must be divisible by the number of data workers ({data_workers})."
     )
 
     return batch_size
@@ -107,7 +103,7 @@ def train(config: TrainingConfig):
 
     torch.cuda.set_device(get_device_placement(config.gpus_ids, world_info))
 
-    local_batch_size = get_local_batch_size(config.optim.batch_size, config.train.micro_bs, config.data.num_workers, world_info)
+    local_batch_size = get_local_batch_size(config.optim.batch_size, config.train.micro_bs, world_info)
 
     if config.ckpt.rollout_path is not None and world_info.rank == 0:
         if envs.SHARDCAST_OUTPUT_DIR is not None:

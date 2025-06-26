@@ -133,8 +133,6 @@ class DataConfig(BaseConfig):
     path: Annotated[str, Field(default="datasets/fineweb-edu")]
     seq_length: Annotated[int, Field(default=1024)]
     fake: Annotated[bool, Field(default=False)]
-    num_workers: Annotated[int, Field(default=1)]
-    timeout: Annotated[float, Field(default=3600)]
 
     local_dir: Annotated[str, Field(default="/dev/shm/zeroband/data")]  # only used if path is gcp
 

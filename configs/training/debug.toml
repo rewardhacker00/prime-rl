@@ -16,4 +16,3 @@ batch_size = 2
 [data]
 fake = true
 seq_length = 128
-timeout = 1

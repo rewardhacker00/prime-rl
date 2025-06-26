@@ -118,9 +118,9 @@ async def main(config: OrchestratorConfig):
         table = get_parquet(completions, rewards)
 
         # Save outputs to parquet file
-        step_path = Path(config.rollout.path) / f"step_{step}"
+        step_path = Path(config.rollout.path)
         step_path.mkdir(parents=True, exist_ok=True)
-        save_path = step_path / f"{uuid.uuid4()}.parquet"
+        save_path = step_path / f"step_{step}.parquet"
         logger.info(f"Saving batch outputs to {save_path}")
         pq.write_table(table, save_path)
 
