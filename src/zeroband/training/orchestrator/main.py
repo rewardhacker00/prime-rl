@@ -17,6 +17,9 @@ from zeroband.utils.pydantic_config import parse_argv
 from zeroband.utils.utils import clean_exit
 
 
+# todo: add sample to wandb
+# todo: add reward, seqlen, task specific reward to wandb
+
 @clean_exit
 async def main(config: OrchestratorConfig):
     # Initialize the logger

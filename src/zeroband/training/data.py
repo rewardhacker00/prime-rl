@@ -11,11 +11,11 @@ from torch.utils.data import DataLoader, IterableDataset
 
 from zeroband.training import envs
 from zeroband.training.config import CollateMode, DataConfig
-from zeroband.training.data_prefetch import STABLE_FILE, GCPPrefetcher
 from zeroband.training.world_info import get_world_info
 from zeroband.utils.logger import get_logger
-from zeroband.utils.parquet import pa_schema
+from zeroband.training.parquet import SCHEMA
 
+STABLE_FILE = "stable"
 
 class DatasetOutput(TypedDict):
     # token level
@@ -24,14 +24,7 @@ class DatasetOutput(TypedDict):
     loss_mask: Int[torch.Tensor, "seq"]
     logprobs: Float[torch.Tensor, "seq"]
 
-    # sample level
-    seq_lens: Int[torch.Tensor, "1"]
-    rewards: Float[torch.Tensor, "1"]
-    task_rewards: Float[torch.Tensor, "1"]
-    length_penalties: Float[torch.Tensor, "1"]
-    target_lengths: Int[torch.Tensor, "1"]
     temperature: float
-    task_type: str
 
 
 class FakeTokenizedDataset(IterableDataset):
@@ -59,12 +52,7 @@ class FakeTokenizedDataset(IterableDataset):
             yield {
                 "input_ids": input_ids,
                 "advantages": advantages,
-                "rewards": 0.5,
                 "loss_mask": torch.ones(len_).int(),
-                "task_rewards": 0.0,
-                "length_penalties": 0.0,
-                "target_lengths": 0,
-                "task_type": "fake_task",
                 "logprobs": logprobs,
                 "temperature": 1.0,
             }
@@ -74,7 +62,7 @@ def validate_schema_pa_file(file: Path):
     """Check if the schema of the parquet file is the same as the schema of the pa_schema"""
     try:
         parquet_schema = pq.read_schema(file)
-        return parquet_schema.equals(pa_schema)
+        return parquet_schema.equals(SCHEMA)
     except Exception as e:
         print(f"Error reading schema for file {file}: {e}")
         return False
@@ -236,11 +224,6 @@ class ParquetDataset(IterableDataset):
                 "input_tokens",
                 "output_tokens",
                 "advantages",
-                "rewards",
-                "task_rewards",
-                "length_penalties",
-                "target_lengths",
-                "task_type",
                 "input_logprobs",
                 "output_logprobs",
                 "temperature",
@@ -283,12 +266,7 @@ class ParquetDataset(IterableDataset):
                             data = {
                                 "input_ids": ids,
                                 "advantages": adv,
-                                "rewards": reward_value,
                                 "loss_mask": loss_mask,
-                                "task_rewards": batch["task_rewards"][i].as_py(),
-                                "length_penalties": batch["length_penalties"][i].as_py(),
-                                "target_lengths": batch["target_lengths"][i].as_py(),
-                                "task_type": batch["task_type"][i].as_py(),
                                 "logprobs": logprobs,
                                 "temperature": batch["temperature"][i].as_py(),
                             }
@@ -320,20 +298,12 @@ def get_dataloader(
     batch_size: int,
     data_config: DataConfig,
     step_count_init: int,
-) -> tuple[DataLoader[list[DatasetOutput]], GCPPrefetcher | None]:
+) -> DataLoader[list[DatasetOutput]]:
     """Get a dataloader for the training dataset"""
 
-    """Get a dataloader for the training dataset"""
-
-    prefetcher = None
     path = data_config.path
 
     use_stable_file = False
-    if "gs" in data_config.path:
-        use_stable_file = True
-        if get_world_info().rank == 0:
-            prefetcher = GCPPrefetcher(data_config.path, data_config.local_dir)
-        path = data_config.local_dir
 
     if data_config.fake:
         train_dataset = FakeTokenizedDataset(data_config.seq_length, len(tokenizer))
@@ -353,7 +323,7 @@ def get_dataloader(
         num_workers=data_config.num_workers,
         collate_fn=no_collate,
     )
-    return loader, prefetcher
+    return loader
 
 
 class BatchOutput(TypedDict):
@@ -364,16 +334,9 @@ class BatchOutput(TypedDict):
     position_ids: Int[torch.Tensor, "batch seq"]
     logprobs: Float[torch.Tensor, "batch seq_minus_1"]
 
-    # sample level
-    seq_lens: Int[torch.Tensor, "sample"]
-    rewards: Float[torch.Tensor, "sample"]
-    task_rewards: Float[torch.Tensor, "sample"]
-    length_penalties: Float[torch.Tensor, "sample"]
-    target_lengths: Int[torch.Tensor, "sample"]
-    task_types: list[str]
-
     # batch level
     temperature: float
+    total_tokens: int
 
 
 ### colate
@@ -389,12 +352,7 @@ def collate_fn(samples: list[DatasetOutput], max_seq_len: int, pad_token_id: int
 
     inputs_ids = [sample["input_ids"] for sample in samples]
     advantages = [sample["advantages"] for sample in samples]
-    rewards = [sample["rewards"] for sample in samples]
     loss_masks = [sample["loss_mask"] for sample in samples]
-    task_rewards = [sample["task_rewards"] for sample in samples]
-    length_penalties = [sample["length_penalties"] for sample in samples]
-    target_lengths = [sample["target_lengths"] for sample in samples]
-    task_types = [sample["task_type"] for sample in samples]
 
     # Handle logprobs if available
     all_logprobs = [sample["logprobs"] for sample in samples if sample["logprobs"] is not None]
@@ -432,14 +390,8 @@ def collate_fn(samples: list[DatasetOutput], max_seq_len: int, pad_token_id: int
         "loss_mask": torch.cat(loss_masks, dim=0)[:max_seq_len].unsqueeze(0),
         "position_ids": torch.cat(position_ids, dim=0)[:max_seq_len].unsqueeze(0),
         "logprobs": concat_logprobs,
-        # sample level
-        "rewards": torch.tensor(rewards),
-        "seq_lens": torch.tensor(seq_lens, dtype=torch.int32),
-        "task_rewards": torch.tensor(task_rewards),
-        "length_penalties": torch.tensor(length_penalties),
-        "target_lengths": torch.tensor(target_lengths),
-        "task_types": task_types,
         "temperature": temperature,
+        "total_tokens": total_len,
     }
 
 
@@ -538,18 +490,12 @@ def merge_batches_padding(batches: list[BatchOutput]) -> BatchOutput:
         # token level
         "input_ids": torch.cat([b["input_ids"] for b in batches], dim=0),
         "advantages": torch.cat([b["advantages"] for b in batches], dim=0),
-        "rewards": torch.cat([b["rewards"] for b in batches], dim=0),
         "loss_mask": torch.cat([b["loss_mask"] for b in batches], dim=0),
         "position_ids": torch.cat([b["position_ids"] for b in batches], dim=0),
         "logprobs": merged_logprobs,
-        # sample level
-        "seq_lens": torch.cat([b["seq_lens"] for b in batches]),
-        "task_rewards": torch.cat([b["task_rewards"] for b in batches]),
-        "length_penalties": torch.cat([b["length_penalties"] for b in batches]),
-        "target_lengths": torch.cat([b["target_lengths"] for b in batches]),
-        "task_types": [task_type for b in batches for task_type in b["task_types"]],
         # batch level
         "temperature": temperatures[0],
+        "total_tokens": sum(b["total_tokens"] for b in batches),
     }
 
 

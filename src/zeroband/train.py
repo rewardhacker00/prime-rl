@@ -187,7 +187,7 @@ def train(config: TrainingConfig):
     step_count_init = (
         config.start_rollout_step if config.start_rollout_step is not None else training_progress.step // config.optim.step_per_rollout
     )
-    train_dataloader, prefetcher = get_dataloader(
+    train_dataloader = get_dataloader(
         tokenizer=tokenizer,
         local_batch_size=local_batch_size,
         batch_size=config.optim.batch_size * config.optim.step_per_rollout,
@@ -296,59 +296,18 @@ def train(config: TrainingConfig):
             data_per_rollout = next(logprobs_aware_iterator)
             num_grad_acc_steps = len(data_per_rollout)
 
-            # Collect samples for WandB logging - do this ONCE per step
-            if config.monitor.wandb is not None and config.monitor.wandb.log_samples and world_info.rank == 0:
-                # Use the first batch for logging (could be configurable if needed)
-                batch = data_per_rollout[0]
 
-                # Log the samples to WandB with history management
-                try:
-                    # Pass and update the sample history
-                    wandb_sample_history = log_prompt_response_samples(tokenizer, batch, training_progress.step, wandb_sample_history)
-                except Exception as e:
-                    logger.warning(f"Error logging samples to WandB: {e}")
-
-            # Now here's the complete grad_acc_step loop WITHOUT the WandB logging inside it:
             for grad_acc_step in range(num_grad_acc_steps):
                 logger.debug(f"training grad_acc_step {grad_acc_step} / {num_grad_acc_steps}")
                 batch = data_per_rollout[grad_acc_step]
 
                 input_ids = batch["input_ids"].to("cuda")
                 if config.normalize_batch_to_token_count:
-                    max_tokens = int(sum(batch["seq_lens"]))
+                    max_tokens = int(batch["total_tokens"])
                 else:
                     max_tokens = input_ids.shape[0] * input_ids.shape[1]
 
                 loss_mask = batch["loss_mask"]
-
-                # Update general metrics
-                for rewards in batch["rewards"]:
-                    metric_averager.update("rewards/sample_reward", rewards)
-                for seq_lens in batch["seq_lens"]:
-                    metric_averager.update("lengths/seq_lens", seq_lens)
-                for length_penalties in batch["length_penalties"]:
-                    metric_averager.update("lengths/length_penalties", length_penalties)
-                for target_lengths in batch["target_lengths"]:
-                    metric_averager.update("lengths/target_lengths", target_lengths)
-
-                # Task-specific metrics with proper grouping
-                if "task_types" in batch:
-                    # Group rewards by task type
-                    task_type_rewards = defaultdict(list)
-                    for i, task_type in enumerate(batch["task_types"]):
-                        task_type_rewards[task_type].append(batch["task_rewards"][i].item())
-
-                    # Update metrics with task-specific averages
-                    for task_key, rewards in task_type_rewards.items():
-                        if rewards:
-                            avg_reward = sum(rewards) / len(rewards)
-                            metric_averager.update(f"task_rewards/{task_key}", torch.tensor(avg_reward))
-
-                    # Add aggregate task_reward metric
-                    all_task_rewards = [reward.item() for reward in batch["task_rewards"]]
-                    if all_task_rewards:
-                        avg_task_reward = sum(all_task_rewards) / len(all_task_rewards)
-                        metric_averager.update("rewards/task_reward", torch.tensor(avg_task_reward))
 
                 # Forward
                 logits: Float[torch.Tensor, "batch seq vocab"] = model(
@@ -425,8 +384,6 @@ def train(config: TrainingConfig):
             training_progress.total_tokens += new_tokens
             training_progress.total_samples += config.optim.batch_size
 
-            padding_proportion = (config.data.seq_length - metric_averager["lengths/seq_lens"].item() - 1) / config.data.seq_length
-
             metrics = {
                 "step": training_progress.step,
                 "losses/Loss": loss_batch.item(),
@@ -435,7 +392,6 @@ def train(config: TrainingConfig):
                 "train/total_tokens": training_progress.total_tokens,
                 "train/total_samples": training_progress.total_samples,
                 "losses/grad_norm": grad_norm.item(),
-                "lengths/padding_proportion": padding_proportion,
             }
 
             for key, value in metric_averager.items():
@@ -445,7 +401,6 @@ def train(config: TrainingConfig):
                 f"step: {training_progress.step}, "
                 f"rollout_step: {training_progress.step // config.optim.step_per_rollout}, "
                 f"loss: {loss_batch.item():.4f}, "
-                f"sample_reward: {metric_averager['rewards/sample_reward'].item():.4f}, "
             )
 
             del loss_batch, grad_norm
@@ -541,9 +496,6 @@ def train(config: TrainingConfig):
 
         if config.stop_after_steps is not None and training_progress.step >= config.stop_after_steps:
             break
-
-    if prefetcher is not None:
-        prefetcher.shutdown()
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
     logger.success("Training finished!")
