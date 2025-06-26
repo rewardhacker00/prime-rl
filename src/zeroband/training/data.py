@@ -9,13 +9,13 @@ from jaxtyping import Float, Int
 from pyarrow import dataset as ds
 from torch.utils.data import DataLoader, IterableDataset
 
-from zeroband.training import envs
 from zeroband.training.config import CollateMode, DataConfig
+from zeroband.training.parquet import SCHEMA
 from zeroband.training.world_info import get_world_info
 from zeroband.utils.logger import get_logger
-from zeroband.training.parquet import SCHEMA
 
 STABLE_FILE = "stable"
+
 
 class DatasetOutput(TypedDict):
     # token level
@@ -119,18 +119,13 @@ class ParquetDataset(IterableDataset):
 
         self._step_count = step_count_init - 1  # we immediately bump the step count by one later
 
-
-
     def __iter__(self) -> Generator[DatasetOutput, Any, None]:
         worker_info = torch.utils.data.get_worker_info()
         worker_id = worker_info.id if worker_info is not None else 0
         num_workers = worker_info.num_workers if worker_info is not None else 1
 
-
         while True:
             self._step_count += 1
-
-            sample_count = 0
 
             self._logger.debug(f"Data processing step {self._step_count}")
 
@@ -208,8 +203,6 @@ def get_dataloader(
 
     path = data_config.path
 
-    use_stable_file = False
-
     if data_config.fake:
         train_dataset = FakeTokenizedDataset(data_config.seq_length, len(tokenizer))
     else:
@@ -260,7 +253,6 @@ def collate_fn(samples: list[DatasetOutput], max_seq_len: int, pad_token_id: int
     has_logprobs = len(all_logprobs) == len(samples)
     logprobs = all_logprobs if has_logprobs else None
 
-    seq_lens = [len(sample["input_ids"]) for sample in samples]
     position_ids = [torch.arange(0, len(sample["input_ids"]), dtype=torch.int32) for sample in samples]
     temperatures = [sample["temperature"] for sample in samples]
     assert all(temperature == temperatures[0] for temperature in temperatures), "all temperatures must be the same"
