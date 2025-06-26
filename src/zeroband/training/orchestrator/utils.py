@@ -5,6 +5,7 @@ from openai.types.chat.chat_completion import ChatCompletion
 from pyarrow import Table
 
 from zeroband.training.orchestrator.config import CompletionConfig
+from zeroband.training.parquet import SCHEMA
 from zeroband.utils.logger import get_logger
 
 
@@ -39,6 +40,13 @@ async def generate_completion(
     return response
 
 
+# "rewards",
+# "task_rewards",
+# "length_penalties",
+# "target_lengths",
+# "task_type",
+
+
 def get_parquet(completions: list[ChatCompletion], rewards: list[float]) -> Table:
     rows = []
     for completion, reward in zip(completions, rewards):
@@ -49,4 +57,4 @@ def get_parquet(completions: list[ChatCompletion], rewards: list[float]) -> Tabl
                 "reward": reward,
             }
         )
-    return Table.from_pylist(rows)
+    return Table.from_pylist(rows, schema=SCHEMA)
