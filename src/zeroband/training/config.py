@@ -1,4 +1,5 @@
 import warnings
+from pathlib import Path
 from typing import Annotated, Literal, TypeAlias, Union
 
 from pydantic import Field, model_validator
@@ -140,8 +141,16 @@ class DataConfig(BaseConfig):
     ignore_zero_advantages: Annotated[bool, Field(default=False)]  # don't use in local setup
 
 
+class PathConfig(BaseConfig):
+    """Configures a path used for input/ output operations"""
+
+    path: Annotated[Path, Field(description="Path to write to.")]
+
+    cleanup: Annotated[bool, Field(default=True, description="Whether to clean the at the beginning of the run.")]
+
+
 class LogConfig(BaseConfig):
-    """Configures the logger."""
+    """Configures the training logger."""
 
     level: Annotated[
         Literal["debug", "info"],
