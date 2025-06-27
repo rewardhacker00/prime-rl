@@ -4,6 +4,7 @@ from zeroband.inference.genesys.ascii_tree_formatting import compute_reward as c
 from zeroband.inference.genesys.code import evaluate_code
 from zeroband.inference.genesys.code_output_prediction import verify_code_output_prediction
 from zeroband.inference.genesys.complex_json_output import verify_complex_json_formatting
+from zeroband.inference.genesys.deepcoder import verify_deepcoder
 from zeroband.inference.genesys.formatask import compute_reward as compute_formatask_reward
 from zeroband.inference.genesys.git_diff import compute_git_diff_reward
 from zeroband.inference.genesys.ifeval import verify_ifeval
@@ -34,6 +35,7 @@ TaskType = Literal[
     "formatask",
     "kernelbench",
     "null_reward",
+    "deepcoder"
 ]
 
 
@@ -59,4 +61,5 @@ _REWARD_FUNCTIONS: dict[TaskType, Callable] = {
     "formatask": compute_formatask_reward,
     "kernelbench": assign_kernel_reward,
     "null_reward": null_reward,
+    "deepcoder": verify_deepcoder
 }

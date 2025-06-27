@@ -18,7 +18,7 @@ from zeroband.utils.utils import clean_exit
 
 
 @clean_exit
-def main(config: EvalConfig):
+def eval(config: EvalConfig):
     # Initialize the logger
     logger = setup_logger(config.log)
     logger.info("Starting evaluation")
@@ -34,15 +34,27 @@ def main(config: EvalConfig):
     logger.success(f"Downloaded model weights in {time.time() - start_time:.2f}s")
 
     # Initializing the model and tokenizer
-    logger.info(f"Initializing model and tokenizer ({config.model} tensor_parallel_size={config.parallel.tp} seed={config.seed})")
+    logger.info(
+        f"Initializing model and tokenizer ({config.model} tensor_parallel_size={config.parallel.tp} seed={config.seed})"
+    )
     start_time = time.time()
     llm = setup_model(config.model, tp=config.parallel.tp, seed=config.seed)
-    logger.success(f"Initialized model and tokenizer in {time.time() - start_time:.2f}s")
+    logger.success(
+        f"Initialized model and tokenizer in {time.time() - start_time:.2f}s"
+    )
 
     # Run benchmarks on base model
     logger.info(f"Running evals on base model {config.model.name}")
     for benchmark in config.eval.benchmarks:
-        run_benchmark(llm, benchmark, config.model, config.sampling, step=0, seed=config.seed, use_tqdm=config.use_tqdm)
+        run_benchmark(
+            llm,
+            benchmark,
+            config.model,
+            config.sampling,
+            step=0,
+            seed=config.seed,
+            use_tqdm=config.use_tqdm,
+        )
 
     # If specified, run online evaluation
     if config.eval.online:
@@ -57,17 +69,31 @@ def main(config: EvalConfig):
             # Run benchmarks on new checkpoint
             logger.info(f"Running evals for checkpoint step {step}")
             for benchmark in config.eval.benchmarks:
-                run_benchmark(llm, benchmark, config.model, config.sampling, step, seed=config.seed, use_tqdm=config.use_tqdm)
+                run_benchmark(
+                    llm,
+                    benchmark,
+                    config.model,
+                    config.sampling,
+                    step,
+                    seed=config.seed,
+                    use_tqdm=config.use_tqdm,
+                )
 
             # Update eval step to next checkpoint step
             step += config.eval.online.interval
 
             if config.eval.online.max_steps and step > config.eval.online.max_steps:
-                logger.info(f"Reached maximum number of steps ({config.eval.online.max_steps}). Stopping online evaluation.")
+                logger.info(
+                    f"Reached maximum number of steps ({config.eval.online.max_steps}). Stopping online evaluation."
+                )
                 break
 
     logger.info("Evaluation finished!")
 
 
+def main():
+    eval(parse_argv(EvalConfig))
+
+
 if __name__ == "__main__":
-    main(parse_argv(EvalConfig))
+    main()
