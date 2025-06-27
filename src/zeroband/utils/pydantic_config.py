@@ -6,7 +6,11 @@ from typing import Annotated, ClassVar, Type, TypeVar
 import tomli
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings as PydanticBaseSettings
-from pydantic_settings import PydanticBaseSettingsSource, SettingsConfigDict, TomlConfigSettingsSource
+from pydantic_settings import (
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+    TomlConfigSettingsSource,
+)
 
 
 class BaseConfig(BaseModel):
@@ -54,6 +58,12 @@ class BaseSettings(PydanticBaseSettings, BaseConfig):
         """
         cls._TOML_FILES = []
 
+    def set_unknown_args(self, unknown_args: list[str]) -> None:
+        self._unknown_args = unknown_args
+
+    def get_unknown_args(self) -> list[str]:
+        return self._unknown_args
+
     @classmethod
     def settings_customise_sources(
         cls,
@@ -77,7 +87,6 @@ class BaseSettings(PydanticBaseSettings, BaseConfig):
     model_config = SettingsConfigDict(
         env_prefix="PRIME_",
         env_nested_delimiter="__",
-        # By default, we do not parse CLI. To activate, set `_cli_parse_args` to true or a list of arguments at init time.
         cli_parse_args=False,
         cli_kebab_case=True,
         cli_implicit_flags=True,
@@ -140,7 +149,9 @@ def extract_toml_paths(args: list[str]) -> tuple[list[str], list[str]]:
                 remaining_args.remove(arg)
                 toml_path = arg.replace("@", "")
 
-            recurence = recurence or check_path_and_handle_inheritance(toml_path, toml_paths)
+            recurence = recurence or check_path_and_handle_inheritance(
+                toml_path, toml_paths
+            )
             cli_toml_file_count += 1
 
     if recurence and cli_toml_file_count > 1:
@@ -166,7 +177,61 @@ def to_kebab_case(args: list[str]) -> list[str]:
 T = TypeVar("T", bound=BaseSettings)
 
 
-def parse_argv(config_cls: Type[T]) -> T:
+def get_all_fields(model: BaseModel | type) -> list[str]:
+    if isinstance(model, BaseModel):
+        model_cls = model.__class__
+    else:
+        model_cls = model
+
+    fields = []
+    for name, field in model_cls.model_fields.items():
+        field_type = field.annotation
+        fields.append(name)
+        if hasattr(field_type, "model_fields"):
+            sub_fields = get_all_fields(field_type)
+            fields.extend(f"{name}.{sub}" for sub in sub_fields)
+    return fields
+
+
+def parse_unknown_args(args: list[str], config_cls: type) -> list[str]:
+    known_fields = get_all_fields(config_cls)
+    known_args = []
+    unknown_args = []
+    i = 0
+    n = len(args)
+
+    def get_is_key(arg: str) -> bool:
+        return arg.startswith("--") or arg.startswith("-")
+
+    while i < n:
+        is_key = get_is_key(args[i])
+        has_value = False if i >= n - 1 or get_is_key(args[i + 1]) else True
+        if not is_key:
+            i += 1
+            continue
+        if args[i].startswith("--"):
+            key = args[i][2:]
+        else:
+            key = args[i][1:]
+        if key in known_fields:
+            known_args.append(args[i])
+            if has_value:
+                known_args.append(args[i + 1])
+                i += 2
+            else:
+                i += 1
+        else:
+            unknown_args.append(args[i])
+            if has_value:
+                unknown_args.append(args[i + 1])
+                i += 2
+            else:
+                i += 1
+
+    return known_args, unknown_args
+
+
+def parse_argv(config_cls: Type[T], allow_extras: bool = False) -> T:
     """
     Parse CLI arguments and TOML configuration files into a pydantic settings instance.
 
@@ -183,6 +248,10 @@ def parse_argv(config_cls: Type[T]) -> T:
     """
     toml_paths, cli_args = extract_toml_paths(sys.argv[1:])
     config_cls.set_toml_files(toml_paths)
+    if allow_extras:
+        cli_args, unknown_args = parse_unknown_args(cli_args, config_cls)
     config = config_cls(_cli_parse_args=to_kebab_case(cli_args))
     config_cls.clear_toml_files()
+    if allow_extras:
+        config.set_unknown_args(unknown_args)
     return config

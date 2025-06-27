@@ -22,7 +22,7 @@ dependencies = [
 # TODO: Support torchrun for training
 train = "zeroband.training.train:main"
 orchestrator = "zeroband.training.orchestrator.orchestrator:main"
-infer = "zeroband.inference.infer:main"
+infer = "zeroband.inference.server:main"
 eval = "zeroband.eval.eval:main"
 
 [build-system]
@@ -42,13 +42,8 @@ train = [
     "shardcast>=0.3.1",
 ]
 infer = [
-    "prime-iroh>=0.3.1",
-    "toploc>=0.1.6",
     "vllm>=0.9.1",
-    "pyext",
-    "reasoning-gym",
-    "cydifflib>=1.2.0",
-    "pylatexenc>=2.10",
+    "uvloop>=0.21.0",
 ]
 orchestrator = [
     "openai>=1.92.2",
@@ -61,8 +56,6 @@ no-build-isolation-package = ["flash-attn"]
 torch = [
   { index = "pytorch-cu128", extra = "cu128" }
 ]
-pyext = { git = "https://github.com/justusmattern27/PyExt.git" }
-reasoning-gym = { git = "https://github.com/open-thought/reasoning-gym.git" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
