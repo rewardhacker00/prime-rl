@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from safetensors.torch import safe_open
+import torch
 
 
 class CheckpointWorker:
@@ -18,16 +18,15 @@ class CheckpointWorker:
 
     def load_checkpoint(self, ckpt_path: Path) -> None:
         """Load a checkpoint from a specified directory."""
-        with safe_open(ckpt_path, framework="pt", device="cpu") as f:
+        state_dict = torch.load(ckpt_path, map_location="cpu")
 
-            def weights_iterator():
-                for key in f.keys():
-                    if not key:  # Skip empty keys
-                        continue
-                    yield key, f.get_tensor(key)
+        def weights_iterator():
+            for key, value in state_dict.items():
+                if not key:
+                    continue
+                yield key, value
 
-            # Load weights from custom weight iterator
-            self.model_runner.model.load_weights(weights_iterator())
+        self.model_runner.model.load_weights(weights_iterator())
 
         # Process weights after loading (important for some models)
         from vllm.model_executor.model_loader.utils import process_weights_after_loading
