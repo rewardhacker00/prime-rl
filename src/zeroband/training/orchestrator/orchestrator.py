@@ -51,7 +51,7 @@ async def orchestrate(config: OrchestratorConfig):
     client = AsyncOpenAI(base_url=config.client.base_url, api_key=config.client.api_key)
 
     # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(config.completion.model)
+    tokenizer = AutoTokenizer.from_pretrained(config.model.name)
 
     # Check health of the client
     await health_check(client)
@@ -71,9 +71,9 @@ async def orchestrate(config: OrchestratorConfig):
         logger.info(f"Starting training step {step}")
 
         # Get the batch
-        problems_per_batch = config.batch_size // config.samples_per_problem
+        problems_per_batch = config.batch_size // config.sampling.n
         indices = range(step * problems_per_batch, (step + 1) * problems_per_batch)
-        problems = dataset.select(indices).to_list() * config.samples_per_problem
+        problems = dataset.select(indices).to_list() * config.sampling.n
         prompts = [problem["prompt"] for problem in problems]
         batch_messages = [[{"role": "user", "content": prompt}] for prompt in prompts]
 
@@ -107,7 +107,7 @@ async def orchestrate(config: OrchestratorConfig):
         start_time = time.time()
         chat_completions = await asyncio.gather(
             *(
-                generate_completion(client, config.completion, messages)
+                generate_completion(client, config.model, config.sampling, messages)
                 for messages in batch_messages
             )
         )
@@ -127,7 +127,7 @@ async def orchestrate(config: OrchestratorConfig):
             json.loads(problem["verification_info"]) for problem in problems
         ]
         rewards = compute_rewards(completions, task_types, verification_infos)
-        advantages = compute_advantages(rewards, config.samples_per_problem)
+        advantages = compute_advantages(rewards, config.sampling.n)
         logger.info(f"Computed rewards (average reward: {np.mean(rewards):.2f}")
 
         # Compute batch metrics
@@ -172,7 +172,7 @@ async def orchestrate(config: OrchestratorConfig):
             completions=completions,
             rewards=rewards,
             advantages=advantages,
-            temperature=config.completion.temperature,
+            temperature=config.sampling.temperature,
             tokenizer=tokenizer,
         )
 

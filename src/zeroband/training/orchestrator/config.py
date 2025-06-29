@@ -3,7 +3,7 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
-from zeroband.training.config import PathConfig
+from zeroband.training.config import ModelConfig, PathConfig
 from zeroband.utils.config import MultiMonitorConfig
 from zeroband.utils.pydantic_config import BaseConfig, BaseSettings
 
@@ -11,15 +11,33 @@ from zeroband.utils.pydantic_config import BaseConfig, BaseSettings
 class OAIClientConfig(BaseConfig):
     """Configures the client to be used for inference."""
 
-    base_url: Annotated[str, Field(default="http://localhost:8000/v1", description="Base URL of the OpenAI API.")]
+    base_url: Annotated[
+        str,
+        Field(
+            default="http://localhost:8000/v1",
+            description="Base URL of the OpenAI API. By default, it is set to a local inference server.",
+        ),
+    ]
+    api_key: Annotated[
+        str,
+        Field(
+            default="insecure",
+            description="API key to use for the OpenAI API. An arbitrary string can be passed if the inference server is not protected by an API key.",
+        ),
+    ]
 
-    api_key: Annotated[str, Field(default="insecure", description="API key to use for the OpenAI API.")]
 
+class SamplingConfig(BaseConfig):
+    """Configures how tokens are sampled from the model. Largely follows the vLLM sampling parameters (https://docs.vllm.ai/en/latest/api/vllm.sampling_params.html)."""
 
-class CompletionConfig(BaseConfig):
-    """Configures the completion request sent to the inference pool."""
-
-    model: Annotated[str, Field(default="Qwen/Qwen3-0.6B", description="Name or path of the model to use.")]
+    n: Annotated[
+        int,
+        Field(
+            default=16,
+            ge=1,
+            description="Number of output sequences to return for the given prompt.",
+        ),
+    ]
 
     temperature: Annotated[
         float,
@@ -30,10 +48,65 @@ class CompletionConfig(BaseConfig):
         ),
     ]
 
+    top_p: Annotated[
+        float,
+        Field(
+            default=1,
+            gt=0,
+            le=1,
+            description="Cumulative probability of the top tokens to consider. If 1, all tokens are considered.",
+        ),
+    ]
+
+    top_k: Annotated[
+        int,
+        Field(
+            default=-1,
+            ge=-1,
+            description="Number of top tokens to consider. If -1, all tokens are considered.",
+        ),
+    ]
+
+    min_p: Annotated[
+        float,
+        Field(
+            default=0.0,
+            ge=0,
+            description="Minimum probability for a token to be considered, relative to the probability of the most likely token. If 0, all tokens are considered.",
+        ),
+    ]
+
+    logprobs: Annotated[
+        int | None,
+        Field(
+            default=0,
+            description="Number of tokens to return log probabilities for. If None, no probability is returned. For all other values, the result includes the log probabilities of the specified number of most likely tokens, as well as the chosen tokens (e.g. 0 returns only the logprob of the chosen token)",
+        ),
+    ]
+
     max_tokens: Annotated[
         int | None,
-        Field(default=None, description="Maximum number of tokens to generate. If None, will use the model's default max length."),
+        Field(
+            default=None,
+            description="Maximum number of output tokens to generate per sequence. If None, will generate until maximum context length or EOS token is hit.",
+        ),
     ]
+
+    min_tokens: Annotated[
+        int,
+        Field(
+            default=0,
+            ge=0,
+            description="Minimum number of output tokens to generate per sequence.",
+        ),
+    ]
+
+    @model_validator(mode="after")
+    def convert_negative_logprobs_to_none(self):
+        """Convert negative logprobs values to None to disable logprobs calculation."""
+        if self.logprobs is not None and self.logprobs < 0:
+            self.logprobs = None
+        return self
 
 
 # TODO(Mika, Will): Change data config to verifiers environment
@@ -49,7 +122,9 @@ class DataConfig(BaseConfig):
         ),
     ]
 
-    split: Annotated[str, Field(default="train", description="Split of the dataset to use.")]
+    split: Annotated[
+        str, Field(default="train", description="Split of the dataset to use.")
+    ]
 
 
 class LogConfig(BaseConfig):
@@ -57,11 +132,18 @@ class LogConfig(BaseConfig):
 
     level: Annotated[
         Literal["debug", "info"],
-        Field(default="info", description="Logging level for the inference run. Will determine the logging verbosity and format."),
+        Field(
+            default="info",
+            description="Logging level for the inference run. Will determine the logging verbosity and format.",
+        ),
     ]
 
     all_ranks: Annotated[
-        bool, Field(default=False, description="Whether to log from all DP ranks. If False, will only log from the main rank (DP rank 0).")
+        bool,
+        Field(
+            default=False,
+            description="Whether to log from all DP ranks. If False, will only log from the main rank (DP rank 0).",
+        ),
     ]
 
     utc: Annotated[
@@ -79,8 +161,11 @@ class OrchestratorConfig(BaseSettings):
     # The OAI client configuration
     client: Annotated[OAIClientConfig, Field(default=OAIClientConfig())]
 
-    # The completion configuration
-    completion: Annotated[CompletionConfig, Field(default=CompletionConfig())]
+    # The model configuration
+    model: Annotated[ModelConfig, Field(default=ModelConfig())]
+
+    # The sampling configuration
+    sampling: Annotated[SamplingConfig, Field(default=SamplingConfig())]
 
     # The data configuration
     data: Annotated[DataConfig, Field(default=DataConfig())]
@@ -91,10 +176,14 @@ class OrchestratorConfig(BaseSettings):
     # The monitor configuration
     monitor: Annotated[MultiMonitorConfig, Field(default=MultiMonitorConfig())]
 
-    # The training orchestration configuration
-    batch_size: Annotated[int, Field(default=128, description="Number of samples to process in each batch.")]
-
-    samples_per_problem: Annotated[int, Field(default=1, description="Number of samples to process for each problem.")]
+    # The training configuration
+    batch_size: Annotated[
+        int,
+        Field(
+            default=128,
+            description="Number of samples to train on per step.",
+        ),
+    ]
 
     max_steps: Annotated[
         int | None,
@@ -128,10 +217,14 @@ class OrchestratorConfig(BaseSettings):
         ),
     ]
 
-    seed: Annotated[int | None, Field(default=None, description="Random seed for the orchestrator.")]
+    seed: Annotated[
+        int | None, Field(default=None, description="Random seed for the orchestrator.")
+    ]
 
     @model_validator(mode="after")
     def validate_batch_size(self):
-        if self.batch_size % self.samples_per_problem != 0:
-            raise ValueError("Batch size must be divisible by the number of samples per problem")
+        if self.batch_size % self.sampling.n != 0:
+            raise ValueError(
+                "Batch size must be divisible by the number of samples per problem"
+            )
         return self

@@ -8,7 +8,8 @@ from openai.types.chat.chat_completion import ChatCompletion
 from pyarrow import Table
 from transformers import AutoTokenizer
 
-from zeroband.training.orchestrator.config import CompletionConfig
+from zeroband.training.config import ModelConfig
+from zeroband.training.orchestrator.config import SamplingConfig
 from zeroband.training.orchestrator.genesys import get_reward_function
 from zeroband.training.parquet import SCHEMA
 from zeroband.utils.logger import get_logger
@@ -46,12 +47,22 @@ async def load_checkpoint(client: AsyncOpenAI, ckpt_path: Path, step: int) -> No
 
 async def generate_completion(
     client: AsyncOpenAI,
-    completion_config: CompletionConfig,
+    model_config: ModelConfig,
+    sampling_config: SamplingConfig,
     messages: list[dict[str, str]],
 ) -> ChatCompletion:
     response = await client.chat.completions.create(
-        **completion_config.model_dump(),
         messages=messages,
+        model=model_config.name,
+        temperature=sampling_config.temperature,
+        top_p=sampling_config.top_p,
+        max_tokens=sampling_config.max_tokens,
+        logprobs=sampling_config.logprobs,
+        extra_body={
+            "top_k": sampling_config.top_k,
+            "min_p": sampling_config.min_p,
+            "min_tokens": sampling_config.min_tokens,
+        },
     )
     assert len(response.choices) == 1, "Response should always have one choice"
     return response

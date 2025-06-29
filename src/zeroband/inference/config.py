@@ -71,7 +71,7 @@ class ModelConfig(BaseConfig):
         bool,
         Field(
             default=False,
-            description="Whether to enforce eager mode. If False, will use PyTorch eager and cuda graphs in hybrid for maximal performance.",
+            description="Whether to enforce eager mode. If False, will use PyTorch eager and cuda graphs in hybrid for maximal performance. Passed to vLLM as `--enforce-eager`",
         ),
     ]
 
@@ -92,7 +92,7 @@ class InferenceConfig(BaseSettings):
         int | None,
         Field(
             default=None,
-            description="Random seed used across inference components. If None, no seeding is used.",
+            description="Seed the inference components. If None, no seeding is used. Passed to vLLM as `--seed`",
         ),
     ]
 
