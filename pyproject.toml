@@ -76,3 +76,10 @@ dev = [
     "ipywidgets>=8.1.7",
     "pytest>=8.4.1",
 ]
+
+
+[tool.ruff.lint]
+ignore = ["F722"] # need to ignore this for jaxtyping https://docs.kidger.site/jaxtyping/faq/
+
+[tool.ruff]
+line-length = 120

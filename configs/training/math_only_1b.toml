@@ -16,7 +16,6 @@ path = "rollouts"
 
 [optim]
 batch_size = 2048
-step_per_rollout = 1
 
 
 [optim.optim]

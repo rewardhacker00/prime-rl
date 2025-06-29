@@ -11,7 +11,6 @@ ac_ckpt = true
 
 [optim]
 batch_size = 512
-step_per_rollout = 1
 
 [optim.optim]
 lr = 1e-6

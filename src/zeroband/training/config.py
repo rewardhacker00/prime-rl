@@ -1,4 +1,3 @@
-import warnings
 from pathlib import Path
 from typing import Annotated, Literal, TypeAlias, Union
 
@@ -27,17 +26,6 @@ class OptimConfig(BaseConfig):
 
     batch_size: Annotated[int, Field(default=512)]
     grad_norm_clip: Annotated[float, Field(default=1.0)]
-    step_per_rollout: Annotated[int, Field(default=1)]
-
-    @model_validator(mode="after")
-    def warn_step_per_rollout(self):
-        if self.step_per_rollout > 1:
-            warnings.warn(
-                UserWarning(
-                    f"step_per_rollout is set to {self.step_per_rollout}. The recommended value is 1, any other value should be either to run a legacy run or a experiment."
-                )
-            )
-        return self
 
 
 class TrainConfig(BaseConfig):
@@ -73,9 +61,7 @@ class CkptConfig(BaseConfig):
     @model_validator(mode="after")
     def check_path_and_interval(self):
         if (self.path is None) != (self.interval is None):
-            raise ValueError(
-                "path and interval must be either both None or both not None"
-            )
+            raise ValueError("path and interval must be either both None or both not None")
         return self
 
 
@@ -83,14 +69,6 @@ class BaseGRPOVariantConfig(BaseConfig):
     """Base config class for GRPO variants."""
 
     highest_entropy_ratio_loss: Annotated[float, Field(default=1.0)]
-
-
-class KlCovConfig(BaseGRPOVariantConfig):
-    """Configures the KL-Covariance loss."""
-
-    type: Annotated[Literal["kl_cov"], Field(default="kl_cov")]
-    kl_coef: Annotated[float, Field(default=1.0)]
-    k_percent: Annotated[float, Field(default=0.2)]
 
 
 class ClippingConfig(BaseGRPOVariantConfig):
@@ -109,7 +87,7 @@ class RatioConfig(BaseGRPOVariantConfig):
     clip_ratio: Annotated[float, Field(default=8.0)]
 
 
-GRPOVariantsConfig: TypeAlias = Union[ClippingConfig, KlCovConfig, RatioConfig]
+GRPOVariantsConfig: TypeAlias = Union[ClippingConfig, RatioConfig]
 
 
 class GRPOLossConfig(BaseConfig):
@@ -119,7 +97,6 @@ class GRPOLossConfig(BaseConfig):
     off_policy: GRPOVariantsConfig = RatioConfig()
 
     kl_coef: Annotated[float | None, Field(default=None)]
-    entropy_loss_coeff: Annotated[float, Field(default=0)]
 
 
 class ModelConfig(BaseConfig):
@@ -142,13 +119,9 @@ class DataConfig(BaseConfig):
     seq_length: Annotated[int, Field(default=1024)]
     fake: Annotated[bool, Field(default=False)]
 
-    local_dir: Annotated[
-        str, Field(default="/dev/shm/zeroband/data")
-    ]  # only used if path is gcp
+    local_dir: Annotated[str, Field(default="/dev/shm/zeroband/data")]  # only used if path is gcp
 
-    ignore_zero_advantages: Annotated[
-        bool, Field(default=False)
-    ]  # don't use in local setup
+    ignore_zero_advantages: Annotated[bool, Field(default=False)]  # don't use in local setup
 
 
 class PathConfig(BaseConfig):
@@ -226,11 +199,9 @@ class Config(BaseSettings):
 
     collate_mode: Annotated[CollateMode, Field(default="padding")]
 
-    start_step: Annotated[int, Field(default=0, ge=0)]
+    start_step: Annotated[int, Field(default=0, ge=0, description="Step to start training from.")]
 
     start_total_samples: Annotated[int | None, Field(default=None)]
-
-    start_rollout_step: Annotated[int | None, Field(default=None)]
 
     stop_after_steps: Annotated[int | None, Field(default=None)]
 
@@ -241,15 +212,5 @@ class Config(BaseSettings):
     @model_validator(mode="after")
     def check_liger(self):
         if self.train.liger_qwen:
-            assert "Qwen" in self.model.name, (
-                "train.liger_qwen can only be applied to Qwen2 models."
-            )
-        return self
-
-    @model_validator(mode="after")
-    def check_ckpt_interval(self):
-        if self.ckpt.interval is not None:
-            assert self.ckpt.interval % self.optim.step_per_rollout == 0, (
-                "ckpt.interval must be divisible by train.step_per_rollout"
-            )
+            assert "Qwen" in self.model.name, "train.liger_qwen can only be applied to Qwen2 models."
         return self

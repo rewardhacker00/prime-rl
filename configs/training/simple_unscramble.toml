@@ -10,7 +10,6 @@ reshard_after_forward = true
 
 [optim]
 batch_size = 32
-step_per_rollout = 4
 grad_norm_clip = 0.00001
 
 [optim.optim]

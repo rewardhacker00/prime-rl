@@ -12,20 +12,19 @@ import torch.distributed as dist
 from huggingface_hub import HfApi
 from pyarrow import Table
 
-TIMEOUT = 120
-
-
-Environment = dict[str, str]
-Command = list[str]
-
-
 from loguru import logger
 
 from zeroband.training.data import STABLE_FILE
 from zeroband.training.world_info import reset_world_info
 from zeroband.utils.logger import reset_logger, set_logger
 from zeroband.utils.models import AttnImpl
-from zeroband.utils.parquet import pa_schema
+from zeroband.training.parquet import SCHEMA
+
+TIMEOUT = 120
+
+
+Environment = dict[str, str]
+Command = list[str]
 
 
 @pytest.fixture(autouse=True)
@@ -84,13 +83,18 @@ def hf_api() -> HfApi:
 
 
 @pytest.fixture(scope="module")
-def llm(model_name: str) -> "LLM":
+def llm(model_name: str):
     """
     vLLM LLM instance to use for tests. Incurs significant startup time, hence reused across tests.
     """
     from vllm import LLM
 
-    yield LLM(model=model_name, enforce_eager=True, disable_async_output_proc=True, dtype="bfloat16")
+    yield LLM(
+        model=model_name,
+        enforce_eager=True,
+        disable_async_output_proc=True,
+        dtype="bfloat16",
+    )
 
     if dist.is_initialized():
         dist.destroy_process_group()
@@ -109,31 +113,45 @@ def create_dummy_parquet_table(batch_size: int, seq_len: int) -> Table:
     """
     # Create data dictionary with typed arrays
     data = {
-        "input_tokens": pa.array([[1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.int32())),
-        "output_tokens": pa.array([[1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.int32())),
+        "input_tokens": pa.array(
+            [[1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.int32())
+        ),
+        "output_tokens": pa.array(
+            [[1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.int32())
+        ),
         "prompt": pa.array(["prompt" for _ in range(batch_size)], type=pa.string()),
-        "completion": pa.array(["completion" for _ in range(batch_size)], type=pa.string()),
+        "completion": pa.array(
+            ["completion" for _ in range(batch_size)], type=pa.string()
+        ),
         "advantages": pa.array([1] * batch_size, type=pa.float32()),
         "rewards": pa.array([1] * batch_size, type=pa.float32()),
         "task_rewards": pa.array([0] * batch_size, type=pa.float32()),
         "length_penalties": pa.array([0] * batch_size, type=pa.float32()),
-        "proofs": pa.array([b"I am toploc proof, handcrafted by jack"] * batch_size, type=pa.binary()),
+        "proofs": pa.array(
+            [b"I am toploc proof, handcrafted by jack"] * batch_size, type=pa.binary()
+        ),
         "step": pa.array([0] * batch_size, type=pa.int32()),
         "target_lengths": pa.array([seq_len] * batch_size, type=pa.int32()),
         "task_type": pa.array(["test_task"] * batch_size, type=pa.string()),
         "problem_id": pa.array(["0"] * batch_size, type=pa.string()),
-        "input_logprobs": pa.array([[0.1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.float32())),
-        "output_logprobs": pa.array([[0.1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.float32())),
+        "input_logprobs": pa.array(
+            [[0.1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.float32())
+        ),
+        "output_logprobs": pa.array(
+            [[0.1] * seq_len for _ in range(batch_size)], type=pa.list_(pa.float32())
+        ),
         "seed": pa.array([42] * batch_size, type=pa.int64()),
         "temperature": pa.array([1.0] * batch_size, type=pa.float32()),
     }
 
     # Create table directly from dictionary
-    return Table.from_pydict(data, schema=pa_schema)
+    return Table.from_pydict(data, schema=SCHEMA)
 
 
 @pytest.fixture(scope="module")
-def fake_rollout_files_dir(tmp_path_factory: pytest.TempPathFactory) -> Callable[[list[int], int, int, int], Path]:
+def fake_rollout_files_dir(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Callable[[list[int], int, int, int], Path]:
     """
     Create a temporary directory with dummy parquet files with inference output for testing
 
@@ -145,7 +163,12 @@ def fake_rollout_files_dir(tmp_path_factory: pytest.TempPathFactory) -> Callable
     """
     path = tmp_path_factory.mktemp("fake_rollout_files")
 
-    def write_dummy_parquet_files(steps: list[int] = [0], num_files: int = 1, batch_size: int = 1, seq_len: int = 10) -> Path:
+    def write_dummy_parquet_files(
+        steps: list[int] = [0],
+        num_files: int = 1,
+        batch_size: int = 1,
+        seq_len: int = 10,
+    ) -> Path:
         for step in steps:
             step_path = path / f"step_{step}"
             os.makedirs(step_path, exist_ok=True)
@@ -167,7 +190,9 @@ class ProcessResult:
         self.pid = pid
 
 
-def run_subprocess(command: Command, env: Environment, timeout: int = TIMEOUT) -> ProcessResult:
+def run_subprocess(
+    command: Command, env: Environment, timeout: int = TIMEOUT
+) -> ProcessResult:
     """Run a subprocess with given command and environment with a timeout"""
     try:
         process = subprocess.Popen(command, env={**os.environ, **env})
@@ -184,18 +209,25 @@ def run_subprocess(command: Command, env: Environment, timeout: int = TIMEOUT) -
         raise e
 
 
-def run_subprocesses_in_parallel(commands: list[Command], envs: list[Environment], timeout: int = TIMEOUT) -> list[ProcessResult]:
+def run_subprocesses_in_parallel(
+    commands: list[Command], envs: list[Environment], timeout: int = TIMEOUT
+) -> list[ProcessResult]:
     """Start multiple processes in parallel using ProcessPoolExecutor and wait for completion."""
     assert len(commands) == len(envs), "Should have an environment for each command"
     with concurrent.futures.ProcessPoolExecutor(max_workers=len(commands)) as executor:
-        futures = [executor.submit(run_subprocess, cmd, env, timeout) for cmd, env in zip(commands, envs)]
+        futures = [
+            executor.submit(run_subprocess, cmd, env, timeout)
+            for cmd, env in zip(commands, envs)
+        ]
         results = []
         for i, future in enumerate(futures):
             try:
                 result = future.result(timeout=timeout)
                 results.append(result)
             except concurrent.futures.TimeoutError:
-                raise TimeoutError(f"Process {i} did not complete within {timeout} seconds")
+                raise TimeoutError(
+                    f"Process {i} did not complete within {timeout} seconds"
+                )
 
     return results
 
@@ -207,6 +239,8 @@ def run_process() -> Callable[[Command, Environment], ProcessResult]:
 
 
 @pytest.fixture(scope="module")
-def run_processes() -> Callable[[list[Command], list[Environment]], list[ProcessResult]]:
+def run_processes() -> Callable[
+    [list[Command], list[Environment]], list[ProcessResult]
+]:
     """Factory fixture for running multiple processes in parallel. Used for parallel inference tests and RL training tests."""
     return run_subprocesses_in_parallel

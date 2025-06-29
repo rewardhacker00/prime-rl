@@ -4,7 +4,7 @@ from beartype import beartype as typechecker
 from jaxtyping import Float, Int, jaxtyped
 from torch import Tensor
 
-from zeroband.training.config import ClippingConfig, GRPOVariantsConfig, KlCovConfig, RatioConfig
+from zeroband.training.config import ClippingConfig, GRPOVariantsConfig, RatioConfig
 
 
 @jaxtyped(typechecker=typechecker)
@@ -17,7 +17,7 @@ def grpo_loss(
     temperature: float,
     max_tokens: int,
     grpo_loss_config: GRPOVariantsConfig,
-) -> tuple[Tensor, Tensor | None]:
+) -> tuple[Tensor, Tensor]:
     if isinstance(grpo_loss_config, ClippingConfig):
         return grpo_loss_clip(
             logits,
@@ -42,20 +42,6 @@ def grpo_loss(
             temperature,
             max_tokens,
             grpo_loss_config.clip_ratio,
-            grpo_loss_config.highest_entropy_ratio_loss,
-        )
-
-    elif isinstance(grpo_loss_config, KlCovConfig):
-        return grpo_loss_kl_cov(
-            logits,
-            input_ids,
-            advantages,
-            original_logprobs,
-            loss_mask,
-            temperature,
-            max_tokens,
-            grpo_loss_config.kl_coef,
-            grpo_loss_config.k_percent,
             grpo_loss_config.highest_entropy_ratio_loss,
         )
     else:
@@ -93,7 +79,9 @@ def grpo_loss_clip(
     loss_mask = loss_mask[:, 1:]
 
     # from the logits we drop the last logits because it corresponds to the next token that will be sample but is not here yet
-    logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token prediction
+    logits = logits[
+        :, :-1, :
+    ]  # (B, L-1, V), exclude the last logit: it corresponds to the next token prediction
 
     # Divide logits by sampling temperature.
     # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
@@ -130,14 +118,16 @@ def grpo_loss_ratio(
     max_tokens: int,
     clip_ratio: float,
     highest_entropy_percentage: float,
-) -> tuple[Tensor, Tensor | None]:
+) -> tuple[Tensor, Tensor]:
     # we start by dropping the bos token because it does not have a corresponding logit
     input_ids = input_ids[:, 1:]
     advantages = advantages[:, 1:]
     loss_mask = loss_mask[:, 1:]
 
     # from the logits we drop the last logits because it corresponds to the next token that will be sample but is not here yet
-    logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token prediction
+    logits = logits[
+        :, :-1, :
+    ]  # (B, L-1, V), exclude the last logit: it corresponds to the next token prediction
 
     # Divide logits by sampling temperature.
     # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
@@ -157,73 +147,6 @@ def grpo_loss_ratio(
         ratio_avg = _apply_mask(ratio, loss_mask, max_tokens)
 
     return loss, ratio_avg
-
-
-# beartype here just make sure we have the correct shape
-@jaxtyped(typechecker=typechecker)
-def grpo_loss_kl_cov(
-    logits: Float[Tensor, "batch seq vocab"],
-    input_ids: Int[Tensor, "batch seq"],
-    advantages: Float[Tensor, "batch seq"],
-    original_logprobs: Float[Tensor, "batch seq_minus_1"],
-    loss_mask: Int[Tensor, "batch seq"],
-    temperature: float,
-    max_tokens: int,
-    kl_coef_cov: float,
-    k_percent: float,
-    highest_entropy_percentage: float,
-) -> tuple[Tensor, Tensor | None]:
-    # we start by dropping the bos token because it does not have a corresponding logit
-    input_ids = input_ids[:, 1:]
-    advantages = advantages[:, 1:]
-    loss_mask = loss_mask[:, 1:]
-
-    # from the logits we drop the last logits because it corresponds to the next token that will be sample but is not here yet
-    logits = logits[:, :-1, :]  # (B, L-1, V), exclude the last logit: it corresponds to the next token prediction
-
-    # Divide logits by sampling temperature.
-    # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
-    logits = logits / temperature
-    per_token_logps = selective_log_softmax(logits, input_ids)
-
-    negative_approx_kl = per_token_logps - original_logprobs
-
-    abs_kl = negative_approx_kl.abs()
-
-    ratio = torch.exp(negative_approx_kl)
-
-    ppo_kl_abs = (abs_kl * loss_mask).sum() / (loss_mask.sum() + 1e-8)
-
-    pg_losses1 = -advantages * ratio
-
-    pg_losses_kl = -advantages * ratio + kl_coef_cov * abs_kl
-
-    pg_losses = pg_losses1
-
-    all_valid = loss_mask > 0
-    all_valid_idx = torch.nonzero(all_valid.reshape(-1), as_tuple=True)[0]
-    all_valid_adv = advantages[all_valid].detach().reshape(-1).cpu()
-    all_valid_logp = per_token_logps[all_valid].detach().reshape(-1).cpu()
-
-    k = min(k_percent, len(all_valid_adv))
-
-    if k != 0:
-        cov_lst_all = (all_valid_adv - all_valid_adv.mean()) * (all_valid_logp - all_valid_logp.mean())
-        k_percent_nums = max(1, int(len(cov_lst_all) * k / 100))
-        large_cov_idxs = torch.topk(cov_lst_all, k_percent_nums, largest=True).indices
-
-        if len(large_cov_idxs) != 0:
-            large_cov_idxs = all_valid_idx[large_cov_idxs]
-            pg_losses[large_cov_idxs // advantages.shape[1], large_cov_idxs % advantages.shape[1]] = pg_losses_kl[
-                large_cov_idxs // advantages.shape[1], large_cov_idxs % advantages.shape[1]
-            ]
-
-    if highest_entropy_percentage < 1.0:
-        loss_mask = highest_entropy_mask(logits, loss_mask, highest_entropy_percentage)
-
-    pg_loss = _apply_mask(pg_losses, loss_mask, max_tokens)
-
-    return pg_loss, ppo_kl_abs
 
 
 def selective_log_softmax(logits, index):
@@ -248,16 +171,24 @@ def selective_log_softmax(logits, index):
             Gathered log probabilities with the same shape as `index`.
     """
     if logits.dtype in [torch.float32, torch.float64]:
-        selected_logits = torch.gather(logits, dim=-1, index=index.unsqueeze(-1)).squeeze(-1)
+        selected_logits = torch.gather(
+            logits, dim=-1, index=index.unsqueeze(-1)
+        ).squeeze(-1)
         # loop to reduce peak mem consumption
         logsumexp_values = torch.stack([torch.logsumexp(lg, dim=-1) for lg in logits])
-        per_token_logps = selected_logits - logsumexp_values  # log_softmax(x_i) = x_i - logsumexp(x)
+        per_token_logps = (
+            selected_logits - logsumexp_values
+        )  # log_softmax(x_i) = x_i - logsumexp(x)
     else:
         # logsumexp approach is unstable with bfloat16, fall back to slightly less efficient approach
         per_token_logps = []
-        for row_logits, row_labels in zip(logits, index):  # loop to reduce peak mem consumption
+        for row_logits, row_labels in zip(
+            logits, index
+        ):  # loop to reduce peak mem consumption
             row_logps = F.log_softmax(row_logits, dim=-1)
-            row_per_token_logps = row_logps.gather(dim=-1, index=row_labels.unsqueeze(-1)).squeeze(-1)
+            row_per_token_logps = row_logps.gather(
+                dim=-1, index=row_labels.unsqueeze(-1)
+            ).squeeze(-1)
             per_token_logps.append(row_per_token_logps)
         per_token_logps = torch.stack(per_token_logps)
     return per_token_logps
@@ -265,13 +196,11 @@ def selective_log_softmax(logits, index):
 
 @jaxtyped(typechecker=typechecker)
 def entropy_loss(
-    logits: Float[Tensor, "batch seq vocab"], loss_mask: Int[Tensor, "batch seq"], temperature: float, max_tokens: int
+    logits: Float[Tensor, "batch seq vocab"],
+    loss_mask: Int[Tensor, "batch seq"],
+    temperature: float,
+    max_tokens: int,
 ) -> Tensor:
-    return _compile_entropy_loss(logits=logits, loss_mask=loss_mask, temperature=temperature, max_tokens=max_tokens)
-
-
-# @torch.compile
-def _compile_entropy_loss(logits: torch.Tensor, loss_mask: torch.Tensor, temperature: float, max_tokens: int):
     logits = logits[:, :-1, :]
     logits = logits / temperature
 
@@ -282,37 +211,9 @@ def _compile_entropy_loss(logits: torch.Tensor, loss_mask: torch.Tensor, tempera
     return _apply_mask(entropy, loss_mask, max_tokens)
 
 
-@jaxtyped(typechecker=typechecker)
-def kl_penalty(
-    logprob: Float[Tensor, "batch seq_minus_1"],
-    ref_logprob: Float[Tensor, "batch seq_minus_1"],
-    loss_mask: Int[Tensor, "batch seq"],
-    max_tokens: int,
-) -> Float[Tensor, ""]:
-    """Compute KL divergence given logprob and ref_logprob.
-    Copied from https://github.com/huggingface/trl/blob/main/trl/trainer/ppo_trainer.py#L1104
-    https://github.com/volcengine/verl/blob/main/verl/trainer/ppo/core_algos.py#L351
-
-    Args:
-        logprob:
-        ref_logprob:
-
-    Returns:
-
-    """
-
-    # J. Schulman. Approximating kl divergence, 2020.
-    # # URL http://joschu.net/blog/kl-approx.html.
-    loss_mask = loss_mask[:, 1:]
-
-    kl = ref_logprob - logprob
-    ratio = torch.exp(kl)
-    kld = (ratio - kl - 1).contiguous()
-    kl = torch.clamp(kld, min=-10, max=10)
-    return _apply_mask(kl, loss_mask, max_tokens)
-
-
-def _apply_mask(tensor: torch.Tensor, mask: torch.Tensor, max_tokens: int) -> torch.Tensor:
+def _apply_mask(
+    tensor: torch.Tensor, mask: torch.Tensor, max_tokens: int
+) -> torch.Tensor:
     return (tensor * mask).sum() / max_tokens
 
 
@@ -334,7 +235,9 @@ def highest_entropy_mask(
         mask: Tensor of shape (batch, seq), dtype=torch.bool
     """
     pd = torch.nn.functional.softmax(logits, dim=-1)
-    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(pd * logits, dim=-1)  # (batch, seq)
+    entropy = torch.logsumexp(logits, dim=-1) - torch.sum(
+        pd * logits, dim=-1
+    )  # (batch, seq)
 
     valid_entropy = entropy[loss_mask.bool()]
     k = int(percent * valid_entropy.numel())

@@ -1,11 +1,8 @@
 collate_mode = "padding"
-stop_after_steps = 2
+stop_after_steps = 1
 
 [model]
 name = "Qwen/Qwen3-0.6B"
-
-[grpo]
-kl_coef = 0.02
 
 [train]
 micro_bs = 1

@@ -9,8 +9,7 @@ micro_bs = 2 # change to 8 for H200
 reshard_after_forward = true
 
 [optim]
-batch_size = 64
-step_per_rollout = 4
+batch_size = 256
 grad_norm_clip = 0.0001
 
 [optim.optim]
