@@ -8,9 +8,9 @@ from pathlib import Path
 import numpy as np
 import pyarrow.parquet as pq
 from datasets import Dataset, load_dataset
-from openai import AsyncOpenAI
 from transformers import AutoTokenizer
 
+from zeroband.eval.utils import run_benchmark
 from zeroband.training.orchestrator.config import OrchestratorConfig
 from zeroband.training.orchestrator.logger import setup_logger
 from zeroband.training.orchestrator.utils import (
@@ -20,6 +20,8 @@ from zeroband.training.orchestrator.utils import (
     get_parquet,
     health_check,
     load_checkpoint,
+    setup_client,
+    wait_for_checkpoint,
 )
 from zeroband.utils.monitor import setup_monitor
 from zeroband.utils.pydantic_config import parse_argv
@@ -33,7 +35,7 @@ from zeroband.utils.utils import clean_exit
 async def orchestrate(config: OrchestratorConfig):
     # Initialize the logger
     logger = setup_logger(config.log)
-    logger.info("Starting orchestrator")
+    logger.info("Starting training orchestrator")
 
     # Prepare paths to communicate with the trainer
     if config.rollout.clean:
@@ -45,16 +47,27 @@ async def orchestrate(config: OrchestratorConfig):
         shutil.rmtree(config.checkpoints.path, ignore_errors=True)
 
     # Setup monitor
+    logger.info(f"Initializing monitor ({config.monitor})")
     monitor = setup_monitor(config.monitor)
 
     # Setup client
-    client = AsyncOpenAI(base_url=config.client.base_url, api_key=config.client.api_key)
+    logger.info(f"Initializing OpenAI client ({config.client.base_url})")
+    client = setup_client(config.client)
 
     # Load tokenizer
+    logger.info(f"Initializing tokenizer for {config.model.name}")
     tokenizer = AutoTokenizer.from_pretrained(config.model.name)
 
     # Check health of the client
     await health_check(client)
+
+    # Optionally, run evals on base model
+    if config.eval:
+        logger.info(f"Running evals on base model {config.model.name}")
+        for benchmark in config.eval.benchmarks:
+            await run_benchmark(
+                client, benchmark, config.model, config.sampling, step=0, use_tqdm=True
+            )
 
     # Load dataset (TODO: Change to verifiers)
     dataset: Dataset = load_dataset(config.data.name, split=config.data.split)
@@ -67,6 +80,7 @@ async def orchestrate(config: OrchestratorConfig):
         f"Starting training loop with {total_steps} steps ({total_steps} batches of {config.batch_size} samples each)"
     )
     ckpt_step = 0
+    last_eval_step = -1
     for step in range(1, total_steps + 1):
         logger.info(f"Starting training step {step}")
 
@@ -77,28 +91,32 @@ async def orchestrate(config: OrchestratorConfig):
         prompts = [problem["prompt"] for problem in problems]
         batch_messages = [[{"role": "user", "content": prompt}] for prompt in prompts]
 
-        # Optionally, update the checkpoint step if we are ahead
-        # TODO(Mika): This seems silly
-        if step - 1 - ckpt_step > config.async_level:
-            wait_time = 0
+        # Optionally, wait for the next checkpoint to be available
+        async_level = step - 1 - ckpt_step  # How many steps training ahead
+        if async_level > config.async_level:
             ckpt_step = step - 1 - config.async_level
-            logger.info(f"Hit async barrier, waiting for checkpoint step {ckpt_step}")
-            while True:
-                ckpt_path = (
-                    Path(config.checkpoints.path) / f"step_{ckpt_step}" / "model.pt"
+            logger.info(f"Hit async barrier {async_level} > {config.async_level}")
+            wait_for_checkpoint(config.checkpoints.path, ckpt_step)
+            await load_checkpoint(client, config.checkpoints.path, ckpt_step)
+
+        # Optionally, run online evals at the specified interval
+        if (
+            config.eval
+            and config.eval.online
+            and ckpt_step % config.eval.online.interval == 0
+            and ckpt_step > last_eval_step
+        ):
+            last_eval_step = ckpt_step
+            logger.info(f"Running evals for checkpoint step {ckpt_step}")
+            for benchmark in config.eval.benchmarks:
+                await run_benchmark(
+                    client,
+                    benchmark,
+                    config.model,
+                    config.sampling,
+                    ckpt_step,
+                    use_tqdm=config.use_tqdm,
                 )
-                if ckpt_path.exists():
-                    logger.info(
-                        f"Found checkpoint for step {ckpt_step} at {ckpt_path}. Reloading model weights."
-                    )
-                    await load_checkpoint(client, ckpt_path, ckpt_step)
-                    break
-                if wait_time % 10 == 0 and wait_time > 0:  # Every log_interval seconds
-                    logger.info(
-                        f"Waiting for checkpoint for step {ckpt_step} at {ckpt_path} for {wait_time} seconds"
-                    )
-                time.sleep(1)
-                wait_time += 1
 
         # Get the completions for the batch
         logger.info(

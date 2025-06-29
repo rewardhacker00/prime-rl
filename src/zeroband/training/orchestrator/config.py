@@ -3,12 +3,13 @@ from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
 
+from zeroband.eval.registry import Benchmark
 from zeroband.training.config import ModelConfig, PathConfig
 from zeroband.utils.config import MultiMonitorConfig
 from zeroband.utils.pydantic_config import BaseConfig, BaseSettings
 
 
-class OAIClientConfig(BaseConfig):
+class ClientConfig(BaseConfig):
     """Configures the client to be used for inference."""
 
     base_url: Annotated[
@@ -33,7 +34,7 @@ class SamplingConfig(BaseConfig):
     n: Annotated[
         int,
         Field(
-            default=16,
+            default=1,
             ge=1,
             description="Number of output sequences to return for the given prompt.",
         ),
@@ -101,6 +102,14 @@ class SamplingConfig(BaseConfig):
         ),
     ]
 
+    seed: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Random seed to use for sampling. If None, no seeding is used.",
+        ),
+    ]
+
     @model_validator(mode="after")
     def convert_negative_logprobs_to_none(self):
         """Convert negative logprobs values to None to disable logprobs calculation."""
@@ -155,11 +164,54 @@ class LogConfig(BaseConfig):
     ]
 
 
+class OnlineEvalConfig(BaseConfig):
+    """Configures online evaluation."""
+
+    ckpt_path: Annotated[
+        Path,
+        Field(
+            default=Path("checkpoints"),
+            description="Path to read checkpoints from when doing online evaluation. Expects subdirectories named 'step_x' within the directory.",
+        ),
+    ]
+
+    interval: Annotated[
+        int,
+        Field(
+            default=100,
+            ge=0,
+            description="Interval at which to evaluate the model.",
+        ),
+    ]
+
+    max_steps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Maximum number of steps to run online evaluation for. If None, will run indefinitely.",
+        ),
+    ]
+
+
+class EvalConfig(BaseConfig):
+    """Configures evaluation."""
+
+    benchmarks: Annotated[
+        list[Benchmark],
+        Field(
+            default=["math500"],
+            description="Benchmarks to evaluate on. By default, it will evaluate only on the MATH-500 benchmark.",
+        ),
+    ]
+
+    online: Annotated[OnlineEvalConfig | None, Field(default=None)]
+
+
 class OrchestratorConfig(BaseSettings):
     """Configures the orchestrator for RL training."""
 
     # The OAI client configuration
-    client: Annotated[OAIClientConfig, Field(default=OAIClientConfig())]
+    client: Annotated[ClientConfig, Field(default=ClientConfig())]
 
     # The model configuration
     model: Annotated[ModelConfig, Field(default=ModelConfig())]
@@ -169,6 +221,9 @@ class OrchestratorConfig(BaseSettings):
 
     # The data configuration
     data: Annotated[DataConfig, Field(default=DataConfig())]
+
+    # The evaluation configuration
+    eval: Annotated[EvalConfig | None, Field(default=None)]
 
     # The logging configuration
     log: Annotated[LogConfig, Field(default=LogConfig())]

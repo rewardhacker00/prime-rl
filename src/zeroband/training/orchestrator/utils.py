@@ -1,4 +1,5 @@
 import asyncio
+import time
 from pathlib import Path
 from typing import Any
 
@@ -9,10 +10,14 @@ from pyarrow import Table
 from transformers import AutoTokenizer
 
 from zeroband.training.config import ModelConfig
-from zeroband.training.orchestrator.config import SamplingConfig
+from zeroband.training.orchestrator.config import ClientConfig, SamplingConfig
 from zeroband.training.orchestrator.genesys import get_reward_function
 from zeroband.training.parquet import SCHEMA
 from zeroband.utils.logger import get_logger
+
+
+def setup_client(client_config: ClientConfig) -> AsyncOpenAI:
+    return AsyncOpenAI(base_url=client_config.base_url, api_key=client_config.api_key)
 
 
 async def health_check(
@@ -58,6 +63,7 @@ async def generate_completion(
         top_p=sampling_config.top_p,
         max_tokens=sampling_config.max_tokens,
         logprobs=sampling_config.logprobs,
+        seed=sampling_config.seed,
         extra_body={
             "top_k": sampling_config.top_k,
             "min_p": sampling_config.min_p,
@@ -66,6 +72,27 @@ async def generate_completion(
     )
     assert len(response.choices) == 1, "Response should always have one choice"
     return response
+
+
+def wait_for_checkpoint(
+    ckpt_path: Path, step: int, interval: int = 1, log_interval: int = 10
+) -> None:
+    logger = get_logger()
+    wait_time = 0
+    ckpt_path = Path(ckpt_path) / f"step_{step}" / "model.pt"
+    logger.info(f"Waiting for checkpoint for step {step} at {ckpt_path}")
+    while True:
+        if ckpt_path.exists():
+            logger.info(f"Found checkpoint for step {step} at {ckpt_path}")
+            break
+        if (
+            wait_time % log_interval == 0 and wait_time > 0
+        ):  # Every log_interval seconds
+            logger.info(
+                f"Waiting for checkpoint for step {step} at {ckpt_path} for {wait_time} seconds"
+            )
+        time.sleep(interval)
+        wait_time += interval
 
 
 def get_parquet(
