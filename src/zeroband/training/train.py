@@ -337,106 +337,104 @@ def train(config: TrainingConfig):
 
             del loss, entropy, clip_ratio
 
-            metric_averager.sync()
+        metric_averager.sync()
 
-            dist.all_reduce(loss_batch, op=dist.ReduceOp.AVG)
+        dist.all_reduce(loss_batch, op=dist.ReduceOp.AVG)
 
-            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_norm_clip).full_tensor()  # type: ignore (is a dtensor)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_norm_clip).full_tensor()  # type: ignore (is a dtensor)
 
-            logger.debug(f"loss: {loss_batch.item()}, grad_norm: {grad_norm.item()}")
+        logger.debug(f"loss: {loss_batch.item()}, grad_norm: {grad_norm.item()}")
 
-            optimizer.step()
-            optimizer.zero_grad()
+        optimizer.step()
+        optimizer.zero_grad()
 
-            logger.debug("optimizer step")
+        logger.debug("optimizer step")
 
-            training_progress.step += 1
-            inner_lr = [group["lr"] for group in optimizer.param_groups][0]
+        training_progress.step += 1
+        inner_lr = [group["lr"] for group in optimizer.param_groups][0]
 
-            token_per_gpu = inputs_ids_shape[0] * inputs_ids_shape[1] * num_grad_acc_steps
-            new_tokens = world_info.world_size * token_per_gpu
-            perf_counter.count_tokens(new_tokens)
-            training_progress.total_tokens += new_tokens
-            training_progress.total_samples += config.optim.batch_size
+        token_per_gpu = inputs_ids_shape[0] * inputs_ids_shape[1] * num_grad_acc_steps
+        new_tokens = world_info.world_size * token_per_gpu
+        perf_counter.count_tokens(new_tokens)
+        training_progress.total_tokens += new_tokens
+        training_progress.total_samples += config.optim.batch_size
 
-            metrics = {
-                "step": training_progress.step,
-                "losses/Loss": loss_batch.item(),
-                "train/inner_lr": inner_lr,
-                "train/total_tokens": training_progress.total_tokens,
-                "train/total_samples": training_progress.total_samples,
-                "losses/grad_norm": grad_norm.item(),
-            }
+        metrics = {
+            "step": training_progress.step,
+            "losses/Loss": loss_batch.item(),
+            "train/inner_lr": inner_lr,
+            "train/total_tokens": training_progress.total_tokens,
+            "train/total_samples": training_progress.total_samples,
+            "losses/grad_norm": grad_norm.item(),
+        }
 
-            for key, value in metric_averager.items():
-                metrics[key] = value.item()
+        for key, value in metric_averager.items():
+            metrics[key] = value.item()
 
-            log = f"step: {training_progress.step}, loss: {loss_batch.item():.4f}, "
+        log = f"step: {training_progress.step}, loss: {loss_batch.item():.4f}, "
 
-            del loss_batch, grad_norm
+        del loss_batch, grad_norm
 
-            tokens_per_second = perf_counter.get_tokens_per_second()
-            if tokens_per_second is not None:
-                tokens_per_second_per_gpu = tokens_per_second / world_info.world_size
-                mfu = perf_counter.get_mfu()
-                metrics.update(
-                    {
-                        "perf/tokens_per_second": tokens_per_second,
-                        "perf/tokens_per_second_per_gpu": tokens_per_second_per_gpu,
-                        "perf/mfu": mfu,
-                    }
-                )
+        tokens_per_second = perf_counter.get_tokens_per_second()
+        if tokens_per_second is not None:
+            tokens_per_second_per_gpu = tokens_per_second / world_info.world_size
+            mfu = perf_counter.get_mfu()
+            metrics.update(
+                {
+                    "perf/tokens_per_second": tokens_per_second,
+                    "perf/tokens_per_second_per_gpu": tokens_per_second_per_gpu,
+                    "perf/mfu": mfu,
+                }
+            )
 
-                log += f", tokens_per_second: {tokens_per_second:.2f}, tokens_per_second_per_gpu: {tokens_per_second_per_gpu:.2f}, mfu: {mfu:.2f}"
+            log += f", tokens_per_second: {tokens_per_second:.2f}, tokens_per_second_per_gpu: {tokens_per_second_per_gpu:.2f}, mfu: {mfu:.2f}"
 
+        if world_info.rank == 0:
+            monitor.log(metrics)
+
+        logger.info(log)
+
+        time_rollout_ckpt = None
+        time_shardcast = None
+        time_rollout_delete = None
+
+        # Lets do this first so that clients can start downloading as soon as possible
+        if config.ckpt.rollout_path is not None:
+            logger.debug("saving rollout ckpt")
+            path = Path(config.ckpt.rollout_path) / f"step_{training_progress.step}"
+            previous_ckpt_rollout.append(path)
+            t0 = time.time()
+            safetensor_path = save_ckpt_for_rollout(model, tokenizer, path, async_save=config.ckpt.async_save)
+            time_rollout_ckpt = time.time() - t0
+
+            time_shardcast = time.time()
             if world_info.rank == 0:
-                monitor.log(metrics)
+                if envs.SHARDCAST_OUTPUT_DIR is not None:
+                    logger.info(f"Broadcasting {safetensor_path}")
+                    shardcast.broadcast(safetensor_path)  # TODO: Is this blocking?
+            time_shardcast = time.time() - time_shardcast
 
-            logger.info(log)
+            time_rollout_delete = time.time()
+            if len(previous_ckpt_rollout) > config.max_async_level:
+                path_to_delete = previous_ckpt_rollout.pop(0)
+                ckpt_step = int(str(path_to_delete).split("_")[-1])
 
-            time_rollout_ckpt = None
-            time_shardcast = None
-            time_rollout_delete = None
+                should_keep = config.ckpt.interval_rollout is not None and ckpt_step % config.ckpt.interval_rollout == 0
+                if path_to_delete.exists() and not should_keep:
+                    logger.info(f"Removing past rollout ckpt at {path_to_delete}")
+                    shutil.rmtree(path_to_delete, ignore_errors=True)
+            time_rollout_delete = time.time() - time_rollout_delete
+        if config.train.memory_profile and (training_progress.step == 2) and world_info.rank == 0:
+            logger.info("Dumping memory snapshot.")
+            pickle_path: str = config.train.memory_profile
+            if not pickle_path.endswith(".pickle"):
+                pickle_path += ".pickle"
+            torch.cuda.memory._dump_snapshot(pickle_path)
+            torch.cuda.memory._record_memory_history(enabled=False)
 
-            # Lets do this first so that clients can start downloading as soon as possible
-            if config.ckpt.rollout_path is not None:
-                logger.debug("saving rollout ckpt")
-                path = Path(config.ckpt.rollout_path) / f"step_{training_progress.step}"
-                previous_ckpt_rollout.append(path)
-                t0 = time.time()
-                safetensor_path = save_ckpt_for_rollout(model, tokenizer, path, async_save=config.ckpt.async_save)
-                time_rollout_ckpt = time.time() - t0
-
-                time_shardcast = time.time()
-                if world_info.rank == 0:
-                    if envs.SHARDCAST_OUTPUT_DIR is not None:
-                        logger.info(f"Broadcasting {safetensor_path}")
-                        shardcast.broadcast(safetensor_path)  # TODO: Is this blocking?
-                time_shardcast = time.time() - time_shardcast
-
-                time_rollout_delete = time.time()
-                if len(previous_ckpt_rollout) > config.max_async_level:
-                    path_to_delete = previous_ckpt_rollout.pop(0)
-                    ckpt_step = int(str(path_to_delete).split("_")[-1])
-
-                    should_keep = (
-                        config.ckpt.interval_rollout is not None and ckpt_step % config.ckpt.interval_rollout == 0
-                    )
-                    if path_to_delete.exists() and not should_keep:
-                        logger.info(f"Removing past rollout ckpt at {path_to_delete}")
-                        shutil.rmtree(path_to_delete, ignore_errors=True)
-                time_rollout_delete = time.time() - time_rollout_delete
-            if config.train.memory_profile and (training_progress.step == 2) and world_info.rank == 0:
-                logger.info("Dumping memory snapshot.")
-                pickle_path: str = config.train.memory_profile
-                if not pickle_path.endswith(".pickle"):
-                    pickle_path += ".pickle"
-                torch.cuda.memory._dump_snapshot(pickle_path)
-                torch.cuda.memory._record_memory_history(enabled=False)
-
-            if config.ckpt.interval is not None and training_progress.step % config.ckpt.interval == 0:
-                logger.info(f"Saving checkpoint at step {training_progress.step}")
-                save_checkpoint_fsdp_state(model, [optimizer], training_progress, config.ckpt.path)
+        if config.ckpt.interval is not None and training_progress.step % config.ckpt.interval == 0:
+            logger.info(f"Saving checkpoint at step {training_progress.step}")
+            save_checkpoint_fsdp_state(model, [optimizer], training_progress, config.ckpt.path)
 
         if config.recompute_logprobs:
             reshard_module(model_for_logprob_only)
