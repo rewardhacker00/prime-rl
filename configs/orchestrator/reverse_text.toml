@@ -6,3 +6,6 @@ name = "willcb/Qwen2.5-0.5B-Reverse-SFT"
 
 [data]
 name = "mikasenghaas/reverse_text_dataset_debug_50_seq_len"
+
+[sampling]
+n = 16

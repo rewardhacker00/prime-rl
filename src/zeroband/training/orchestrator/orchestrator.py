@@ -65,9 +65,7 @@ async def orchestrate(config: OrchestratorConfig):
     if config.eval:
         logger.info(f"Running evals on base model {config.model.name}")
         for benchmark in config.eval.benchmarks:
-            await run_benchmark(
-                client, benchmark, config.model, config.sampling, step=0, use_tqdm=True
-            )
+            await run_benchmark(client, benchmark, config.model, config.sampling, step=0, use_tqdm=True)
 
     # Load dataset (TODO: Change to verifiers)
     dataset: Dataset = load_dataset(config.data.name, split=config.data.split)
@@ -124,37 +122,23 @@ async def orchestrate(config: OrchestratorConfig):
         )
         start_time = time.time()
         chat_completions = await asyncio.gather(
-            *(
-                generate_completion(client, config.model, config.sampling, messages)
-                for messages in batch_messages
-            )
+            *(generate_completion(client, config.model, config.sampling, messages) for messages in batch_messages)
         )
         generate_time = time.time() - start_time
-        logger.success(
-            f"Received {len(chat_completions)} completions in {generate_time:.2f}s"
-        )
+        logger.success(f"Received {len(chat_completions)} completions in {generate_time:.2f}s")
 
         # Get the rewards for the completions
         # TODO: How are we getting the rewards? Is this handled in verifiers or does the orchestrator make a request to a dedicated reward server? For now, we use dummy rewards
-        completions = [
-            chat_completion.choices[0].message.content
-            for chat_completion in chat_completions
-        ]
+        completions = [chat_completion.choices[0].message.content for chat_completion in chat_completions]
         task_types = [problem["task_type"] for problem in problems]
-        verification_infos = [
-            json.loads(problem["verification_info"]) for problem in problems
-        ]
+        verification_infos = [json.loads(problem["verification_info"]) for problem in problems]
         rewards = compute_rewards(completions, task_types, verification_infos)
         advantages = compute_advantages(rewards, config.sampling.n)
         logger.info(f"Computed rewards (average reward: {np.mean(rewards):.2f}")
 
         # Compute batch metrics
-        num_input_tokens = sum(
-            completion.usage.prompt_tokens for completion in chat_completions
-        )
-        num_output_tokens = sum(
-            completion.usage.completion_tokens for completion in chat_completions
-        )
+        num_input_tokens = sum(completion.usage.prompt_tokens for completion in chat_completions)
+        num_output_tokens = sum(completion.usage.completion_tokens for completion in chat_completions)
         num_tokens = num_input_tokens + num_output_tokens
         throughput = num_tokens / generate_time
         avg_seq_length = num_tokens / config.batch_size
