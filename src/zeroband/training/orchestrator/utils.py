@@ -20,9 +20,7 @@ def setup_client(client_config: ClientConfig) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=client_config.base_url, api_key=client_config.api_key)
 
 
-async def health_check(
-    client: AsyncOpenAI, timeout: int = 60, interval: int = 10
-) -> None:
+async def health_check(client: AsyncOpenAI, timeout: int = 60, interval: int = 10) -> None:
     logger = get_logger()
     logger.info("Checking health of inference pool")
     num_attempts = 0
@@ -33,9 +31,7 @@ async def health_check(
             return
         except Exception as e:
             num_attempts += 1
-            logger.warning(
-                f"Inference pool cannot be reached after {num_attempts} attempt(s) (Error: {e})"
-            )
+            logger.warning(f"Inference pool cannot be reached after {num_attempts} attempt(s) (Error: {e})")
             await asyncio.sleep(interval)
     msg = f"Inference pool is not ready after {num_attempts} attempt(s). Aborting..."
     logger.error(msg)
@@ -46,6 +42,7 @@ async def load_checkpoint(client: AsyncOpenAI, ckpt_path: Path, step: int) -> No
     """Make a HTTP post request to the vLLM server to load a checkpoint."""
     logger = get_logger()
     url = str(client.base_url) + "load_checkpoint"
+    ckpt_path = ckpt_path / f"step_{step}" / "model.pt"
     logger.info(f"Sending load checkpoint request to {url} with ckpt_path {ckpt_path}")
     await client._client.post(url=url, json={"ckpt_path": ckpt_path.as_posix()})
 
@@ -74,9 +71,7 @@ async def generate_completion(
     return response
 
 
-def wait_for_checkpoint(
-    ckpt_path: Path, step: int, interval: int = 1, log_interval: int = 10
-) -> None:
+def wait_for_checkpoint(ckpt_path: Path, step: int, interval: int = 1, log_interval: int = 10) -> None:
     logger = get_logger()
     wait_time = 0
     ckpt_path = Path(ckpt_path) / f"step_{step}" / "model.pt"
@@ -85,12 +80,8 @@ def wait_for_checkpoint(
         if ckpt_path.exists():
             logger.info(f"Found checkpoint for step {step} at {ckpt_path}")
             break
-        if (
-            wait_time % log_interval == 0 and wait_time > 0
-        ):  # Every log_interval seconds
-            logger.info(
-                f"Waiting for checkpoint for step {step} at {ckpt_path} for {wait_time} seconds"
-            )
+        if wait_time % log_interval == 0 and wait_time > 0:  # Every log_interval seconds
+            logger.info(f"Waiting for checkpoint for step {step} at {ckpt_path} for {wait_time} seconds")
         time.sleep(interval)
         wait_time += interval
 
@@ -104,9 +95,7 @@ def get_parquet(
     tokenizer: AutoTokenizer,
 ) -> Table:
     rows = []
-    for prompt, completion, reward, advantage in zip(
-        prompts, completions, rewards, advantages
-    ):
+    for prompt, completion, reward, advantage in zip(prompts, completions, rewards, advantages):
         input_tokens = tokenizer.encode(prompt)
         output_tokens = tokenizer.encode(completion)
         rows.append(
@@ -128,9 +117,7 @@ def compute_rewards(
     verification_infos: list[dict[str, Any]],
 ) -> list[float]:
     rewards = []
-    for completion, task_type, verification_info in zip(
-        completions, task_types, verification_infos
-    ):
+    for completion, task_type, verification_info in zip(completions, task_types, verification_infos):
         compute_reward = get_reward_function(task_type)
         reward = compute_reward(completion, verification_info)
         rewards.append(reward)
@@ -138,10 +125,7 @@ def compute_rewards(
 
 
 def compute_advantages(rewards: list[float], samples_per_problem: int) -> list[float]:
-    per_problem_rewards = [
-        rewards[i : i + samples_per_problem]
-        for i in range(0, len(rewards), samples_per_problem)
-    ]
+    per_problem_rewards = [rewards[i : i + samples_per_problem] for i in range(0, len(rewards), samples_per_problem)]
     advantages = []
     for problem_rewards in per_problem_rewards:
         reward_array = np.array(problem_rewards)
