@@ -30,13 +30,9 @@ def setup_logger(log_config: LogConfig) -> Logger:
     )
 
     # Define the debug information in debug mode
-    debug = "PID={process.id} | {file}:{line}" if log_config.level.upper() == "DEBUG" else ""
-
-    if debug:
-        debug = f" [{debug}]"
-
-    # Assemble the final format
-    format = time + debug + message
+    format = time + message
+    if log_config.level.upper() == "DEBUG":
+        format += " ({file}:{line})"
 
     # Remove all default handlers
     logger.remove()

@@ -30,20 +30,13 @@ def setup_logger(log_config: LogConfig, world: World) -> Logger:
         ]
     )
 
-    # Define the debug information in debug mode
-    debug = "PID={process.id} | {file}::{line}" if log_config.level.upper() == "DEBUG" else ""
-
     # Add parallel information to the format
-    if world.num_gpus > 1:
-        parallel = f"Rank {world.rank}"
-        if debug:
-            debug += " | "
-        debug += parallel
-    if debug:
-        debug = f" [{debug}]"
-
-    # Assemble the final format
-    format = time + debug + message
+    if world.world_size > 1:
+        format = time + f"[ Rank {world.rank} ]" + message
+    else:
+        format = time + message
+    if log_config.level.upper() == "DEBUG":
+        format += "".join([f"<level>{NO_BOLD}", " [{file}::{line}]", f"{RESET}</level>"])
 
     # Remove all default handlers
     logger.remove()

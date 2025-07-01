@@ -104,9 +104,7 @@ class APIMonitor(Monitor):
         async def _post_metrics():
             try:
                 async with aiohttp.ClientSession() as session:
-                    async with session.post(
-                        self.url, json=payload, headers=headers
-                    ) as response:
+                    async with session.post(self.url, json=payload, headers=headers) as response:
                         if response is not None:
                             response.raise_for_status()
                     self.logger.debug(f"Logged successfully to server {self.url}")
@@ -126,12 +124,10 @@ class WandbMonitor(Monitor):
         run_config: BaseSettings | None = None,
     ):
         super().__init__(config, task_id)
-        rank = os.environ.get("RANK", os.environ.get("DP_RANK", "0"))
-        self.enabled = rank == "0"
+        rank = int(os.environ.get("LOCAL_RANK", os.environ.get("DP_RANK", "0")))
+        self.enabled = rank == 0
         if not self.enabled:
-            self.logger.warning(
-                f"Skipping WandbMonitor initialization from non-master rank ({rank})"
-            )
+            self.logger.warning(f"Skipping WandbMonitor initialization from non-master rank ({rank})")
             return
         self.wandb = wandb.init(
             project=config.project,
@@ -172,17 +168,13 @@ class MultiMonitor:
         if config.api is not None:
             self.outputs["api"] = APIMonitor(config.api, task_id)
         if config.wandb is not None:
-            self.outputs["wandb"] = WandbMonitor(
-                config.wandb, task_id, run_config=run_config
-            )
+            self.outputs["wandb"] = WandbMonitor(config.wandb, task_id, run_config=run_config)
 
         self.disabled = len(self.outputs) == 0
 
         # Start metrics collection thread, if system_log_frequency is greater than 0
         if config.system_log_frequency > 0:
-            self.logger.info(
-                f"Starting thread to log system metrics every {config.system_log_frequency}s"
-            )
+            self.logger.info(f"Starting thread to log system metrics every {config.system_log_frequency}s")
             self._system_log_frequency = config.system_log_frequency
             self._has_gpu = self._set_has_gpu()
             self._thread = None
@@ -274,9 +266,7 @@ def get_monitor() -> MultiMonitor:
     """Returns the global monitor."""
     global _MONITOR
     if _MONITOR is None:
-        raise RuntimeError(
-            "Monitor not initialized. Please call `setup_monitor` first."
-        )
+        raise RuntimeError("Monitor not initialized. Please call `setup_monitor` first.")
     return _MONITOR
 
 
@@ -288,8 +278,6 @@ def setup_monitor(
     """Sets up a monitor to log metrics to multiple specified outputs."""
     global _MONITOR
     if _MONITOR is not None:
-        raise RuntimeError(
-            "Monitor already initialized. Please call `setup_monitor` only once."
-        )
+        raise RuntimeError("Monitor already initialized. Please call `setup_monitor` only once.")
     _MONITOR = MultiMonitor(config, task_id, run_config)
     return _MONITOR

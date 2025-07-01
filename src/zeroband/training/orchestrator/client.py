@@ -1,3 +1,4 @@
+import asyncio
 from pathlib import Path
 
 from openai import AsyncOpenAI
@@ -11,21 +12,21 @@ def setup_client(client_config: ClientConfig) -> AsyncOpenAI:
     return AsyncOpenAI(base_url=client_config.base_url, api_key=client_config.api_key)
 
 
-async def check_health(client: AsyncOpenAI, timeout: int = 60, interval: int = 10) -> None:
+async def check_health(client: AsyncOpenAI, interval: int = 1, log_interval: int = 10, timeout: int = 60) -> None:
     logger = get_logger()
-    logger.info("Checking health of inference pool")
+    wait_time = 0
     url = str(client.base_url)[:-4] + "/health"
-    num_attempts = 0
-    while num_attempts * interval < timeout:
+    logger.debug(f"Starting pinging {url} to check health")
+    while wait_time < timeout:
         try:
             await client._client.get(url=url)
-            logger.success("Inference pool is ready")
+            logger.debug(f"Inference pool is ready after {wait_time} seconds")
             return
         except Exception as e:
-            num_attempts += 1
-            logger.warning(f"Inference pool cannot be reached after {num_attempts} attempt(s) (Error: {e})")
+            logger.warning(f"Inference pool was not reached after {wait_time} seconds (Error: {e})")
             await asyncio.sleep(interval)
-    msg = f"Inference pool is not ready after {num_attempts} attempt(s). Aborting..."
+            wait_time += interval
+    msg = f"Inference pool is not ready after {wait_time} (>{timeout}) seconds. Aborting..."
     logger.error(msg)
     raise TimeoutError(msg)
 
@@ -36,7 +37,7 @@ async def check_has_model(client: AsyncOpenAI, model_name: str) -> None:
     models = (await client.models.list()).data
     if not any(model.id == model_name for model in models):
         raise ValueError(f"Model {model_name} was not found in the inference pool")
-    logger.success(f"Model {model_name} was found in the inference pool")
+    logger.debug(f"Model {model_name} was found in the inference pool")
 
 
 async def reload_weights(client: AsyncOpenAI, path: Path, step: int) -> None:

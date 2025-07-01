@@ -52,8 +52,7 @@ class DataLoader:
 
     def get_batch(self) -> list[MicroBatch]:
         while True:
-            # here adding step + 1 because orchestrator count step is offset by 1 bc of @mika
-            step_path = self.data_path / f"step_{self.current_step + 1}" / f"rank_{self.world.rank}.pt"
+            step_path = self.data_path / f"step_{self.current_step}" / f"rank_{self.world.rank}.pt"
             if step_path.exists():
                 batches = torch.load(step_path)
                 self.current_step += 1

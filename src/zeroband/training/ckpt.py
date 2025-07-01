@@ -16,7 +16,7 @@ from zeroband.utils.logger import get_logger
 
 @dataclass
 class TrainingProgress:
-    step: int = 0
+    step: int = 1
     total_tokens: int = 0
     total_samples: int = 0
 
@@ -30,7 +30,7 @@ def save_full_checkpoint(
     # Get logger
     logger = get_logger()
     start_time = time.time()
-    logger.info(f"Writing checkpoint to {path}")
+    logger.debug(f"Writing checkpoint to {path}")
 
     # Create checkpoint state
     ckpt_state = {
@@ -44,7 +44,7 @@ def save_full_checkpoint(
     local_path = path / f"local_rank_{get_world().local_rank}"
     with open(local_path, "wb") as f:
         torch.save(ckpt_state, f)
-    logger.info(f"Checkpoint saved at {path} in {time.time() - start_time:.2f} seconds")
+    logger.debug(f"Checkpoint saved at {path} in {time.time() - start_time:.2f} seconds")
 
 
 def load_full_checkpoint(
@@ -56,7 +56,7 @@ def load_full_checkpoint(
     # Get logger
     logger = get_logger()
     start_time = time.time()
-    logger.info(f"Loading checkpoint from {path}")
+    logger.debug(f"Loading checkpoint from {path}")
 
     # Check local step path exists
     local_path = path / f"local_rank_{get_world().local_rank}"
@@ -77,7 +77,7 @@ def load_full_checkpoint(
     progress.step = state["progress"].step
     progress.total_samples = state["progress"].total_samples
 
-    logger.info(f"Checkpoint loaded in {time.time() - start_time:.2f} seconds")
+    logger.debug(f"Checkpoint loaded in {time.time() - start_time:.2f} seconds")
 
 
 def save_weight_checkpoint(
@@ -102,7 +102,7 @@ def save_weight_checkpoint(
 
     # Gather distributed weights for weight checkpoint
     start_time = time.time()
-    logger.info("Gathering sharded weights")
+    logger.debug("Gathering sharded weights")
     cpu_state = {}
     for key, value in model.state_dict().items():
         if isinstance(value, DTensor):
@@ -118,14 +118,14 @@ def save_weight_checkpoint(
             cpu_state[key] = value.to("cpu", non_blocking=False)
 
     torch.distributed.barrier()
-    logger.info(f"Gathered sharded weights in {time.time() - start_time:.2f} seconds")
+    logger.debug(f"Gathered sharded weights in {time.time() - start_time:.2f} seconds")
 
     model_path = path / "model.pt"
 
     def _save_weight_checkpoint():
         if is_master:
             start_time = time.time()
-            logger.info(f"Saving weights to {path}")
+            logger.debug(f"Saving weights to {path}")
 
             # Save model weights to temporary file to avoid race condition
             tmp_model_path = path / "model.pt.tmp"
@@ -139,7 +139,7 @@ def save_weight_checkpoint(
             model.generation_config.save_pretrained(path)
             tokenizer.save_pretrained(path)
 
-            logger.info(f"Saved weights to {path} in {time.time() - start_time:.2f} seconds")
+            logger.debug(f"Saved weights to {path} in {time.time() - start_time:.2f} seconds")
 
     if async_save:
         thread = threading.Thread(target=_save_weight_checkpoint)

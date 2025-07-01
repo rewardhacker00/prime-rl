@@ -73,7 +73,13 @@ class WandbMonitorConfig(BaseConfig):
             description="The W&B group to log to. If None, it will not set the group. Use grouping if you want multiple associated runs (e.g. RL training has a training and inference run) log to the same dashboard.",
         ),
     ]
-    name: Annotated[str | None, Field(default=None, description="The W&B name to to use for logging.")]
+    name: Annotated[
+        str | None,
+        Field(
+            default=None,
+            description="The W&B name to to use for logging. If group and name are set, they will be automatically combined into a single name.",
+        ),
+    ]
     dir: Annotated[
         Path | None,
         Field(
@@ -83,6 +89,13 @@ class WandbMonitorConfig(BaseConfig):
     ]
 
     offline: Annotated[bool, Field(default=False, description="Whether to run W&B in offline mode.")]
+
+    @model_validator(mode="after")
+    def validate_name(self):
+        # If group and name are set, the run name will be prefixed with the group
+        if self.group and self.name:
+            self.name = f"{self.group}-{self.name}"
+        return self
 
 
 class MultiMonitorConfig(BaseConfig):

@@ -21,21 +21,23 @@ async def eval(config: EvalConfig):
     # Initialize the logger
     logger = setup_logger(config.log)
     logger.info("Starting evaluation")
-    logger.info(f"Model config: {config.model}")
-    logger.info(f"Sampling config: {config.sampling}")
-    logger.info(f"Evaluation config: {config.eval}")
+    logger.info(f"Model: {config.model}")
+    logger.info(f"Sampling: {config.sampling}")
+    logger.info(f"Evaluation: {config.eval}")
 
     # Initialize the monitor
     logger.info(f"Initializing monitor ({config.monitor})")
     setup_monitor(config.monitor, None, config)
 
     # Setup client
+    logger.info(f"Initializing OpenAI client ({config.client.base_url})")
     client = setup_client(config.client)
-    logger.info(f"Initialized OpenAI client ({config.client.base_url})")
 
     # Check health of the client
+    logger.info("Waiting for inference pool to be ready")
     await check_health(client)
     await check_has_model(client, config.model.name)
+    logger.success(f"Inference pool is healthy and serves {config.model.name}")
 
     # Reset weights to base model to allow reusing inference server across runs
     logger.info("Resetting weights to base model")

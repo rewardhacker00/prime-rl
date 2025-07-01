@@ -1,3 +1,4 @@
+from copy import deepcopy
 from pathlib import Path
 from typing import Annotated, Literal, TypeAlias, Union
 
@@ -101,7 +102,7 @@ class WeightCheckpointConfig(BaseConfig):
     save_async: Annotated[
         bool,
         Field(
-            default=False,
+            default=True,
             description="Whether to save the checkpoint asynchronously.",
         ),
     ]
@@ -157,6 +158,7 @@ class FakeDataLoaderConfig(BaseConfig):
             raise ValueError("Batch size must be divisible by micro batch size")
         if self.batch_size < self.micro_batch_size:
             raise ValueError("Batch size must be greater than or equal to micro batch size")
+        return self
 
 
 class DataLoaderConfig(BaseConfig):
@@ -223,7 +225,7 @@ class Config(BaseSettings):
     log: LogConfig = LogConfig()
 
     # The monitor configuration
-    monitor: MultiMonitorConfig = MultiMonitorConfig()
+    monitor: Annotated[MultiMonitorConfig, Field(default=MultiMonitorConfig())]
 
     max_steps: Annotated[
         int | None,
@@ -259,4 +261,9 @@ class Config(BaseSettings):
             self.orchestrator.max_steps = self.max_steps
             self.orchestrator.model.name = self.model.name
             self.orchestrator.async_level = self.async_level
+            self.orchestrator.monitor.wandb = deepcopy(self.monitor.wandb)
+            group = self.monitor.wandb.group
+            if group:
+                self.monitor.wandb.name = f"{group}-train"
+                self.orchestrator.monitor.wandb.name = f"{group}-orchestrator"
         return self

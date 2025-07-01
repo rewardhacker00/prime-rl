@@ -35,20 +35,25 @@ from zeroband.utils.utils import clean_exit
 async def orchestrate(config: OrchestratorConfig):
     # Initialize the logger
     logger = setup_logger(config.log)
-    logger.info("Starting training orchestrator")
+    logger.info("Starting orchestrator")
+    logger.debug(f"ClientConfig({config.client})")
+    logger.debug(f"ModelConfig({config.model})")
+    logger.debug(f"DataConfig({config.data})")
+    logger.debug(f"SamplingConfig({config.sampling})")
+    logger.debug(f"EvaluationConfig({config.eval})")
 
     # Prepare paths to communicate with the trainer
     if config.rollout.clean:
-        logger.info(f"Cleaning rollout path ({config.rollout.path})")
+        logger.debug(f"Cleaning rollout path ({config.rollout.path})")
         shutil.rmtree(config.rollout.path, ignore_errors=True)
 
     if config.weights.clean:
-        logger.info(f"Cleaning weights path ({config.weights.path})")
+        logger.debug(f"Cleaning weights path ({config.weights.path})")
         shutil.rmtree(config.weights.path, ignore_errors=True)
 
     # Setup monitor
     logger.info(f"Initializing monitor ({config.monitor})")
-    monitor = setup_monitor(config.monitor)
+    monitor = setup_monitor(config.monitor, None, config)
 
     # Setup client
     logger.info(f"Initializing OpenAI client ({config.client.base_url})")
@@ -59,9 +64,10 @@ async def orchestrate(config: OrchestratorConfig):
     tokenizer = AutoTokenizer.from_pretrained(config.model.name)
 
     # Check health of the client
-    logger.info("Checking inference pool health")
+    logger.info("Waiting for inference pool to be ready")
     await check_health(client)
     await check_has_model(client, config.model.name)
+    logger.success("Inference pool ready")
 
     # Reset weights to base model to allow reusing inference server across runs
     logger.info("Resetting weights to base model")
@@ -69,7 +75,7 @@ async def orchestrate(config: OrchestratorConfig):
 
     # Optionally, run evals on base model
     if config.eval:
-        logger.info(f"Running evals on base model {config.model.name}")
+        logger.info("Running evals on base model")
         for benchmark in config.eval.benchmarks:
             await run_benchmark(client, benchmark, config.model, config.sampling, step=0, use_tqdm=True)
 
@@ -78,15 +84,14 @@ async def orchestrate(config: OrchestratorConfig):
     dataset = dataset.shuffle(seed=config.seed)
 
     # Iterate over dataset in batches
-    num_batches = len(dataset) // config.batch_size
-    total_steps = min(config.max_steps or math.inf, num_batches)
-    logger.info(
-        f"Starting training loop with {total_steps} steps ({total_steps} batches of {config.batch_size} samples each)"
-    )
+    total_steps = min(config.max_steps or math.inf, len(dataset) // config.batch_size)
+    logger.info(f"Starting training loop ({total_steps=}, {config.batch_size=})")
+    total_tokens, total_samples = 0, 0
     ckpt_step = 0
     last_eval_step = -1
     for step in range(1, total_steps + 1):
-        logger.info(f"Starting training step {step}")
+        logger.info(f"Orchestrator step {step} (checkpoint step: {ckpt_step})")
+        step_start_time = time.time()
 
         # Get the batch
         problems_per_batch = config.batch_size // config.sampling.n
@@ -99,7 +104,9 @@ async def orchestrate(config: OrchestratorConfig):
         async_level = step - 1 - ckpt_step  # How many steps training ahead
         if async_level > config.async_level:
             ckpt_step = step - 1 - config.async_level
-            logger.info(f"Hit async barrier {async_level} > {config.async_level}")
+            logger.warning(
+                f"Hit async barrier because step {step} is {async_level} (>{config.async_level}) steps ahead of checkpoint step {ckpt_step}."
+            )
             wait_for_weight_checkpoint(config.weights.path, ckpt_step)
             await reload_weights(client, config.weights.path, ckpt_step)
 
@@ -123,58 +130,35 @@ async def orchestrate(config: OrchestratorConfig):
                 )
 
         # Get the completions for the batch
-        logger.info(
-            f"Sending {len(batch_messages)} inference requests for training step {step} (checkpoint step: {ckpt_step})"
-        )
-        start_time = time.time()
+        # TODO: Integrate with async (multi-turn) rollout function from verifiers
+        logger.info(f"Sending {len(batch_messages)} inference requests for step {step}")
+        generate_completions_start_time = time.time()
         chat_completions = await asyncio.gather(
             *(generate_completion(client, config.model, config.sampling, messages) for messages in batch_messages)
         )
-        generate_time = time.time() - start_time
-        logger.success(f"Received {len(chat_completions)} completions in {generate_time:.2f}s")
+        generate_completions_time = time.time() - generate_completions_start_time
 
         # Get the rewards for the completions
-        # TODO: How are we getting the rewards? Is this handled in verifiers or does the orchestrator make a request to a dedicated reward server? For now, we use dummy rewards
+        # TODO: Integrate with async scoring function from verifiers
+        logger.info(f"Computing rewards for step {step}")
+        compute_rewards_start_time = time.time()
         completions = [chat_completion.choices[0].message.content for chat_completion in chat_completions]
         task_types = [problem["task_type"] for problem in problems]
         verification_infos = [json.loads(problem["verification_info"]) for problem in problems]
         rewards = compute_rewards(completions, task_types, verification_infos)
         advantages = compute_advantages(rewards, config.sampling.n)
-        logger.info(f"Computed rewards (average reward: {np.mean(rewards):.2f})")
+        compute_rewards_time = time.time() - compute_rewards_start_time
 
         # Compute batch metrics
         num_input_tokens = sum(completion.usage.prompt_tokens for completion in chat_completions)
         num_output_tokens = sum(completion.usage.completion_tokens for completion in chat_completions)
         num_tokens = num_input_tokens + num_output_tokens
-        throughput = num_tokens / generate_time
+        total_tokens += num_tokens
+        total_samples += config.batch_size
+        throughput = num_tokens / (generate_completions_time + compute_rewards_time)
         avg_seq_length = num_tokens / config.batch_size
 
-        # Update total metrics
-        # TODO(Mika): Use some form of metrics averaging class to make this less verbose
-        # total_num_input_tokens += num_input_tokens
-        # total_num_output_tokens += num_output_tokens
-        # total_num_tokens += num_tokens
-        # total_generate_time += generate_time
-        # avg_throughput = total_num_tokens / total_generate_time
-        # avg_seq_length = total_num_tokens / step
-
-        # Log metrics to stdout
-        logger.info(
-            f"Throughput: {throughput:.1f} tokens/s ({num_tokens} tokens in {generate_time:.2f}s, {avg_seq_length:.1f} tokens/sample)"
-        )
-
-        # Log metrics to monitor
-        progress_metrics = {
-            "perf/throughput": throughput,
-            "perf/avg_seq_length": avg_seq_length,
-            "perf/num_input_tokens": num_input_tokens,
-            "perf/num_output_tokens": num_output_tokens,
-            "perf/num_tokens": num_tokens,
-            "step": step,
-        }
-        monitor.log(progress_metrics)
-
-        # Write serialized batch to disk
+        # Write serialized batch to disk for trainer workers to consume
         all_data_ranks_batches = prepare_batch(
             prompts=prompts,
             completions=completions,
@@ -188,20 +172,63 @@ async def orchestrate(config: OrchestratorConfig):
             collate_mode=config.collate_mode,
         )
 
+        step_path = Path(config.rollout.path) / f"step_{step}"
+        step_path.mkdir(parents=True, exist_ok=True)
         for i, batches in enumerate(all_data_ranks_batches):
-            save_folder = Path(config.rollout.path) / f"step_{step}"
-            save_folder.mkdir(parents=True, exist_ok=True)
-            save_path = save_folder / f"rank_{i}.pt"
-            tmp_path = save_path.with_suffix(".tmp")
+            batch_path = step_path / f"rank_{i}.pt"
+            tmp_path = batch_path.with_suffix(".tmp")
+            logger.debug(f"Saving rollouts for step {step} for rank {i} to {batch_path}")
             torch.save(batches, tmp_path)
-            tmp_path.rename(save_path)
-            logger.info(f"Saved rollouts for step {step} to {save_path}")
+            tmp_path.rename(batch_path)
 
-    logger.success("Training completed.")
+        # Log step metrics
+        step_time = time.time() - step_start_time
+        step_message = f"Finished orchestrator step {step} in {step_time:.2f}s (Avg. Reward: {np.mean(rewards):.2f}, Throughput: {throughput:.1f} tokens/s, Avg. Seq. Length: {avg_seq_length:.1f} tokens/sample)"
+        logger.success(step_message)
+
+        # Log progress metrics to monitor
+        progress_metrics = {
+            "progress/infer/total_tokens": total_tokens,
+            "progress/infer/total_samples": total_samples,
+            "progress/train/step": ckpt_step,  # Shared W&B axis
+            "step": step,
+        }
+        monitor.log(progress_metrics)
+
+        # Log perfrmance metrics to monitor
+        perf_metrics = {
+            "perf/infer/throughput": throughput,
+            "perf/infer/seq_len": avg_seq_length,
+            "step": step,
+        }
+        monitor.log(perf_metrics)
+
+        # Log rewards metrics to monitor
+        reward_metrics = {"reward/mean": np.mean(rewards), "step": step}
+        monitor.log(reward_metrics)
+
+        # Log time metrics to monitor
+        time_metrics = {
+            "time/infer": step_time,
+            "time/infer/generate_completions": generate_completions_time,
+            "time/infer/compute_rewards": compute_rewards_time,
+            "step": step,
+        }
+        monitor.log(time_metrics)
+
+    logger.success("Orchestrator finished.")
+
+
+def run_orchestrator(config: OrchestratorConfig):
+    """Utility function to run the orchestrator as a sidecar process in a synchronous context."""
+    import asyncio
+
+    asyncio.run(orchestrate(config))
 
 
 def main():
-    asyncio.run(orchestrate(parse_argv(OrchestratorConfig)))
+    """Main entry-point for orchestrator. Run using `uv run orchestrator`"""
+    run_orchestrator(parse_argv(OrchestratorConfig))
 
 
 if __name__ == "__main__":

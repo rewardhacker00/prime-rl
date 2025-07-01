@@ -15,10 +15,10 @@ def wait_for_weight_checkpoint(path: Path, step: int, interval: int = 1, log_int
     logger.info(f"Waiting for checkpoint for step {step} at {model_path}")
     while True:
         if model_path.exists():
-            logger.info(f"Found checkpoint for step {step} at {model_path}")
+            logger.debug(f"Found checkpoint for step {step} at {model_path}")
             break
         if wait_time % log_interval == 0 and wait_time > 0:  # Every log_interval seconds
-            logger.info(f"Waiting for checkpoint for step {step} at {model_path} for {wait_time} seconds")
+            logger.debug(f"Waiting for checkpoint for step {step} at {model_path} for {wait_time} seconds")
         time.sleep(interval)
         wait_time += interval
 

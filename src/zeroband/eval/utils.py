@@ -45,10 +45,10 @@ async def run_benchmark(
     monitor = get_monitor()
 
     benchmark_name = get_benchmark_display_name(benchmark)
-    logger.info(f"Running {benchmark_name}")
+    logger.info(f"Evaluating {model_config.name} on {benchmark_name} at step {step}")
 
     # Initializing the benchmark dataset
-    logger.info(f"Initializing dataset ({benchmark})")
+    logger.debug(f"Loading benchmark dataset ({benchmark})")
     load_data_start_time = time.time()
     dataset = get_benchmark_dataset(benchmark)
 
@@ -64,19 +64,20 @@ async def run_benchmark(
     problem_ids = list(range(len(dataset))) * sampling_config.n
     batch_messages = [[{"role": "user", "content": prompt}] for prompt in prompts]
     load_data_time = time.time() - load_data_start_time
-    logger.info(f"Loaded dataset in {load_data_time:.2f}s")
+    logger.debug(f"Loaded dataset in {load_data_time:.2f}s")
 
     # Generate completions
-    logger.info(f"Generating completions for {len(dataset)} problems")
-    generate_start_time = time.time()
+    logger.debug(f"Generating completions for {len(dataset)} problems")
+    generate_completions_start_time = time.time()
     chat_completions = await asyncio.gather(
         *(generate_completion(client, model_config, sampling_config, messages) for messages in batch_messages)
     )
-    generate_time = time.time() - generate_start_time
+    generate_completions_time = time.time() - generate_completions_start_time
+    logger.debug(f"Generated completions in {generate_completions_time:.2f}s")
 
     # Compute rewards
-    logger.info("Computing rewards")
-    reward_start_time = time.time()
+    logger.debug("Computing rewards")
+    compute_rewards_start_time = time.time()
     completions = [chat_completion.choices[0].message.content for chat_completion in chat_completions]
     task_types = [item["task_type"] for item in dataset]
     verification_infos = [json.loads(item["verification_info"]) for item in dataset]
@@ -101,15 +102,16 @@ async def run_benchmark(
         )
     else:
         logger.warning("Skipping computing pass@k rates because the task rewards appear to be non-binary")
-    reward_time = time.time() - reward_start_time
+    compute_rewards_time = time.time() - compute_rewards_start_time
+    logger.debug(f"Computed rewards in {compute_rewards_time:.2f}s")
 
     # Log statistics
     benchmark_time = time.time() - benchmark_start_time
-    logger.success(f"Ran {benchmark_name} in {benchmark_time:.2f}s")
-    logger.info(f"Score: {sample_stats.reward.mean():.2f}")
+    message = f"Evaluated {benchmark_name} in {benchmark_time:.2f}s (Score={sample_stats.reward.mean():.2f}"
     if could_be_binary:
         for pass_rate, pass_rate_score in pass_rates.mean().items():
-            logger.info(f"{capitalize(pass_rate)}: {pass_rate_score:.2f}")
+            message += f", {capitalize(pass_rate)}: {pass_rate_score:.2f}"
+    logger.success(message + ")")
 
     # Log statistics to monitor
     eval_metrics = {"step": step, "score": sample_stats.reward.mean()}
@@ -120,9 +122,9 @@ async def run_benchmark(
     # Log timing metrics to monitor
     time_metrics = {
         "step": step,
-        "load_data_time": load_data_time,
-        "generate_time": generate_time,
-        "reward_time": reward_time,
-        "benchmark_time": benchmark_time,
+        f"time/eval/{benchmark}": benchmark_time,
+        f"time/eval/{benchmark}/load_data": load_data_time,
+        f"time/eval/{benchmark}/generate_completions": generate_completions_time,
+        f"time/eval/{benchmark}/compute_rewards": compute_rewards_time,
     }
-    monitor.log(time_metrics, wandb_prefix=f"eval/{benchmark}/time")
+    monitor.log(time_metrics)

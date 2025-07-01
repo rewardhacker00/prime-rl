@@ -149,9 +149,7 @@ def extract_toml_paths(args: list[str]) -> tuple[list[str], list[str]]:
                 remaining_args.remove(arg)
                 toml_path = arg.replace("@", "")
 
-            recurence = recurence or check_path_and_handle_inheritance(
-                toml_path, toml_paths
-            )
+            recurence = recurence or check_path_and_handle_inheritance(toml_path, toml_paths)
             cli_toml_file_count += 1
 
     if recurence and cli_toml_file_count > 1:

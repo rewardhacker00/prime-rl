@@ -1,37 +1,15 @@
-from typing import Dict
-
-import torch
-
 import zeroband.training.envs as envs
 
 
 class World:
-    """
-    This class retrieves topology information for distributed training and inference settings by parsing environment variables, typically set by torchrun.
-    """
+    """This class stores topology information for distributed training and inference settings by parsing environment variables set by torchrun."""
 
-    rank: int
-    world_size: int
-    local_rank: int
-    local_world_size: int
-
-    def __init__(
-        self,
-        rank: int | None = None,
-        world_size: int | None = None,
-        local_rank: int | None = None,
-        local_world_size: int | None = None,
-    ):
-        """
-        Initialize the World object either manually or by parsing environment variables.
-        """
-        self.rank = rank or envs.RANK
-        self.world_size = world_size or envs.WORLD_SIZE
-        self.local_rank = local_rank or envs.LOCAL_RANK
-        self.local_world_size = local_world_size or envs.LOCAL_WORLD_SIZE
-        self.gpu_ids = envs.CUDA_VISIBLE_DEVICES or list(range(torch.cuda.device_count()))
+    def __init__(self):
+        self.rank = envs.RANK or 0
+        self.world_size = envs.WORLD_SIZE or 1
+        self.local_rank = envs.LOCAL_RANK or 0
+        self.local_world_size = envs.LOCAL_WORLD_SIZE or 1
         self._check_world()
-        self.num_gpus = len(self.gpu_ids)
         self.num_nodes = self.world_size // self.local_world_size
 
     def _check_world(self):
@@ -42,36 +20,22 @@ class World:
         assert self.world_size % self.local_world_size == 0
 
     def __repr__(self):
-        return f"World(world_size={self.world_size}, rank={self.rank}, local_rank={self.local_rank}, local_world_size={self.local_world_size}, num_nodes={self.num_nodes}, num_gpus={self.num_gpus}, gpu_ids={self.gpu_ids})"
-
-    def json(self) -> Dict[str, int]:
-        return {
-            "rank": self.rank,
-            "world_size": self.world_size,
-            "local_rank": self.local_rank,
-            "local_world_size": self.local_world_size,
-            "num_nodes": self.num_nodes,
-        }
+        return f"World(world_size={self.world_size}, rank={self.rank}, local_rank={self.local_rank}, local_world_size={self.local_world_size}, num_nodes={self.num_nodes})"
 
 
 # Singleton instance of World
 _WORLD: World | None = None
 
 
-def get_world(
-    rank: int | None = None,
-    world_size: int | None = None,
-    local_rank: int | None = None,
-    local_world_size: int | None = None,
-) -> World:
+def get_world() -> World:
     """Returns the World. If not initialized, it will initialize."""
     global _WORLD
     if _WORLD is None:
-        _WORLD = World(rank=rank, world_size=world_size, local_rank=local_rank, local_world_size=local_world_size)
+        _WORLD = World()
     return _WORLD
 
 
-def reset_world() -> None:
+def reset_world():
     global _WORLD
     _WORLD = None
 
