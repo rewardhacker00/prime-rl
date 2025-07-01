@@ -11,18 +11,18 @@ from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
 from zeroband.eval.utils import run_benchmark
+from zeroband.training.orchestrator.client import (
+    check_has_model,
+    check_health,
+    generate_completion,
+    reload_weights,
+    reset_weights,
+    setup_client,
+)
 from zeroband.training.orchestrator.config import OrchestratorConfig
 from zeroband.training.orchestrator.data import prepare_batch
 from zeroband.training.orchestrator.logger import setup_logger
-from zeroband.training.orchestrator.utils import (
-    compute_advantages,
-    compute_rewards,
-    generate_completion,
-    health_check,
-    reload_weights,
-    setup_client,
-    wait_for_weight_checkpoint,
-)
+from zeroband.training.orchestrator.utils import compute_advantages, compute_rewards, wait_for_weight_checkpoint
 from zeroband.utils.monitor import setup_monitor
 from zeroband.utils.pydantic_config import parse_argv
 from zeroband.utils.utils import clean_exit
@@ -59,7 +59,13 @@ async def orchestrate(config: OrchestratorConfig):
     tokenizer = AutoTokenizer.from_pretrained(config.model.name)
 
     # Check health of the client
-    await health_check(client)
+    logger.info("Checking inference pool health")
+    await check_health(client)
+    await check_has_model(client, config.model.name)
+
+    # Reset weights to base model to allow reusing inference server across runs
+    logger.info("Resetting weights to base model")
+    await reset_weights(client)
 
     # Optionally, run evals on base model
     if config.eval:
