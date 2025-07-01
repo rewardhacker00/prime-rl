@@ -4,8 +4,7 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from zeroband.eval.registry import Benchmark
-from zeroband.training.config import ModelConfig, PathConfig
-from zeroband.utils.config import MultiMonitorConfig
+from zeroband.utils.config import ModelConfig, MultiMonitorConfig
 from zeroband.utils.pydantic_config import BaseConfig, BaseSettings
 
 
@@ -162,6 +161,20 @@ class LogConfig(BaseConfig):
     ]
 
 
+class PathConfig(BaseConfig):
+    """Configures a path used for input/ output operations"""
+
+    path: Annotated[Path, Field(description="Path to write to.")]
+
+    clean: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Whether to clean the path at the beginning of the run. If True, will delete the entire directory.",
+        ),
+    ]
+
+
 class OnlineEvalConfig(BaseConfig):
     """Configures online evaluation."""
 
@@ -205,14 +218,6 @@ class EvalConfig(BaseConfig):
     online: Annotated[OnlineEvalConfig | None, Field(default=None)]
 
 
-class TrainConfig(BaseConfig):
-    # this name is temporary and map one one to the current training data config
-    max_seq_len: Annotated[int, Field(default=1024)]
-    micro_bs: Annotated[int, Field(default=1)]
-    batch_size: Annotated[int, Field(default=128)]
-    n_data_ranks: Annotated[int, Field(default=1)]  # todo should be automatic
-
-
 class OrchestratorConfig(BaseSettings):
     """Configures the orchestrator for RL training."""
 
@@ -237,13 +242,29 @@ class OrchestratorConfig(BaseSettings):
     # The monitor configuration
     monitor: Annotated[MultiMonitorConfig, Field(default=MultiMonitorConfig())]
 
-    # The training configuration
-    batch_size: Annotated[
+    batch_size: Annotated[int, Field(default=128, ge=1, description="Number of samples to train on per step.")]
+
+    micro_batch_size: Annotated[
         int,
         Field(
             default=128,
-            description="Number of samples to train on per step.",
+            ge=1,
+            description="Number of samples to train on per micro batch. This value should be tuned based on the hardware available. Usually, to the largest value divisble by the training batch size.",
         ),
+    ]
+
+    seq_len: Annotated[
+        int,
+        Field(
+            default=1024,
+            description="Sequence length to use for training. If a sample is shorter than this, it will be padded. If a sequence is longer than this, it will be truncated.",
+        ),
+    ]
+
+    # TODO(Mika): This should be automatic from the number of ZMQ connections
+    num_train_workers: Annotated[
+        int,
+        Field(default=1, ge=1, description="Number of training workers to use for training."),
     ]
 
     max_steps: Annotated[
@@ -258,6 +279,7 @@ class OrchestratorConfig(BaseSettings):
         int,
         Field(
             default=2,
+            ge=0,
             description="Maximum number of async levels to use. If 0, will do synchronous RL. Else, it will allow to go `async_level` steps ahead of training.",
         ),
     ]
@@ -265,25 +287,27 @@ class OrchestratorConfig(BaseSettings):
     rollout: Annotated[
         PathConfig,
         Field(
-            default=PathConfig(path=Path("rollouts")),
+            default=PathConfig(path=Path("rollouts"), clean=True),
             description="Path to write inference outputs to. Will be populated by the orchestrator with responses from inference pool.",
         ),
     ]
 
-    checkpoints: Annotated[
+    weights: Annotated[
         PathConfig,
         Field(
-            default=PathConfig(path=Path("checkpoints")),
-            description="Path to read new model checkpoints from. Will be populated by the trainer.",
+            default=PathConfig(path=Path("weights"), clean=True),
+            description="Path to read updated model weights from. Will be populated by the trainer.",
         ),
     ]
 
     seed: Annotated[int | None, Field(default=None, description="Random seed for the orchestrator.")]
 
-    train: Annotated[TrainConfig, Field(default=TrainConfig())]
-
     @model_validator(mode="after")
     def validate_batch_size(self):
         if self.batch_size % self.sampling.n != 0:
             raise ValueError("Batch size must be divisible by the number of samples per problem")
+        if self.batch_size % self.micro_batch_size != 0:
+            raise ValueError("Batch size must be divisible by micro batch size")
+        if self.batch_size < self.micro_batch_size:
+            raise ValueError("Batch size must be greater than or equal to micro batch size")
         return self

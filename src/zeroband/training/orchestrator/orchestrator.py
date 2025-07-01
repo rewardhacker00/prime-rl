@@ -6,26 +6,26 @@ import time
 from pathlib import Path
 
 import numpy as np
+import torch
 from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
 from zeroband.eval.utils import run_benchmark
 from zeroband.training.orchestrator.config import OrchestratorConfig
+from zeroband.training.orchestrator.data import prepare_batch
 from zeroband.training.orchestrator.logger import setup_logger
 from zeroband.training.orchestrator.utils import (
     compute_advantages,
     compute_rewards,
     generate_completion,
     health_check,
-    load_checkpoint,
-    prepare_batch,
+    reload_weights,
     setup_client,
-    wait_for_checkpoint,
+    wait_for_weight_checkpoint,
 )
 from zeroband.utils.monitor import setup_monitor
 from zeroband.utils.pydantic_config import parse_argv
 from zeroband.utils.utils import clean_exit
-import torch
 
 # todo: add sample to wandb
 # todo: add reward, seqlen, task specific reward to wandb
@@ -42,9 +42,9 @@ async def orchestrate(config: OrchestratorConfig):
         logger.info(f"Cleaning rollout path ({config.rollout.path})")
         shutil.rmtree(config.rollout.path, ignore_errors=True)
 
-    if config.checkpoints.clean:
-        logger.info(f"Cleaning checkpoints path ({config.checkpoints.path})")
-        shutil.rmtree(config.checkpoints.path, ignore_errors=True)
+    if config.weights.clean:
+        logger.info(f"Cleaning weights path ({config.weights.path})")
+        shutil.rmtree(config.weights.path, ignore_errors=True)
 
     # Setup monitor
     logger.info(f"Initializing monitor ({config.monitor})")
@@ -94,8 +94,8 @@ async def orchestrate(config: OrchestratorConfig):
         if async_level > config.async_level:
             ckpt_step = step - 1 - config.async_level
             logger.info(f"Hit async barrier {async_level} > {config.async_level}")
-            wait_for_checkpoint(config.checkpoints.path, ckpt_step)
-            await load_checkpoint(client, config.checkpoints.path, ckpt_step)
+            wait_for_weight_checkpoint(config.weights.path, ckpt_step)
+            await reload_weights(client, config.weights.path, ckpt_step)
 
         # Optionally, run online evals at the specified interval
         if (
@@ -134,7 +134,7 @@ async def orchestrate(config: OrchestratorConfig):
         verification_infos = [json.loads(problem["verification_info"]) for problem in problems]
         rewards = compute_rewards(completions, task_types, verification_infos)
         advantages = compute_advantages(rewards, config.sampling.n)
-        logger.info(f"Computed rewards (average reward: {np.mean(rewards):.2f}")
+        logger.info(f"Computed rewards (average reward: {np.mean(rewards):.2f})")
 
         # Compute batch metrics
         num_input_tokens = sum(completion.usage.prompt_tokens for completion in chat_completions)
@@ -168,25 +168,27 @@ async def orchestrate(config: OrchestratorConfig):
         }
         monitor.log(progress_metrics)
 
-        # Write step parquet file
+        # Write serialized batch to disk
         all_data_ranks_batches = prepare_batch(
             prompts=prompts,
             completions=completions,
             advantages=advantages,
             temperature=config.sampling.temperature,
             tokenizer=tokenizer,
-            micro_bs=config.train.micro_bs,
-            max_seq_len=config.train.max_seq_len,
-            n_data_ranks=config.train.n_data_ranks,
+            batch_size=config.batch_size,
+            micro_batch_size=config.micro_batch_size,
+            num_train_workers=config.num_train_workers,
+            seq_len=config.seq_len,
         )
 
         for i, batches in enumerate(all_data_ranks_batches):
             save_folder = Path(config.rollout.path) / f"step_{step}"
             save_folder.mkdir(parents=True, exist_ok=True)
-            save_path = save_folder / f"data_rank_{i}.pt.tmp"
-            torch.save(batches, save_path)
-            logger.info(f"Saving batch outputs to {save_path}")
-            save_path.rename(save_path.with_suffix(""))
+            save_path = save_folder / f"rank_{i}.pt"
+            tmp_path = save_path.with_suffix(".tmp")
+            torch.save(batches, tmp_path)
+            tmp_path.rename(save_path)
+            logger.info(f"Saved rollouts for step {step} to {save_path}")
 
     logger.success("Training completed.")
 

@@ -6,6 +6,18 @@ from pydantic import Field, model_validator
 from zeroband.utils.pydantic_config import BaseConfig
 
 
+class ModelConfig(BaseConfig):
+    """Configures the model to be used for training."""
+
+    name: Annotated[
+        str,
+        Field(
+            default="Qwen/Qwen3-0.6B",
+            description="Name or path of the HF model to use.",
+        ),
+    ]
+
+
 class FileMonitorConfig(BaseConfig):
     """Configures logging to a file."""
 
@@ -83,7 +95,12 @@ class MultiMonitorConfig(BaseConfig):
     wandb: Annotated[WandbMonitorConfig, Field(default=None)]
 
     system_log_frequency: Annotated[
-        int, Field(default=0, ge=0, description="Interval in seconds to log system metrics. If 0, no system metrics are logged)")
+        int,
+        Field(
+            default=0,
+            ge=0,
+            description="Interval in seconds to log system metrics. If 0, no system metrics are logged)",
+        ),
     ]
 
     def __str__(self) -> str:

@@ -47,7 +47,7 @@ class ModelConfig(BaseConfig):
         str,
         Field(
             default="Qwen/Qwen3-0.6B",
-            description="Name or path of the HF model to use. Passed to vLLM as `--model`",
+            description="Name or path of the HF model to use.",
         ),
     ]
 

@@ -4,65 +4,106 @@ from typing import Annotated, Literal, TypeAlias, Union
 from pydantic import Field, model_validator
 
 from zeroband.utils.config import MultiMonitorConfig
-from zeroband.utils.models import AttnImpl
 from zeroband.utils.pydantic_config import BaseConfig, BaseSettings
 
+AttnImplementation: TypeAlias = Literal["sdpa", "flash_attention_2"]
 
-class AdamConfig(BaseConfig):
+
+class ModelConfig(BaseConfig):
+    """Configures the model for training."""
+
+    name: Annotated[
+        str,
+        Field(
+            default="Qwen/Qwen3-0.6B",
+            description="Name or path of the HF model to use.",
+        ),
+    ]
+
+    attn: Annotated[
+        AttnImplementation, Field(default="flash_attention_2", description="The attention implementation to use.")
+    ]
+
+    compile: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Whether to compile the model using `torch.compile`. Currently discouraged because it was found to destabilize training.",
+        ),
+    ]
+
+    ac: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Whether to apply activation checkpointing to the model.",
+        ),
+    ]
+
+    reshard_after_forward: Annotated[
+        bool, Field(default=True, alias="reshard", description="Whether to reshard the model after each forward pass.")
+    ]
+
+
+class OptimizerConfig(BaseConfig):
     """Configures the Adam optimizer."""
 
-    type: Annotated[Literal["adam"], Field(default="adam")]
     lr: Annotated[float, Field(default=4e-4, ge=0)]
     weight_decay: Annotated[float, Field(default=0.01, ge=0)]
     betas1: Annotated[float, Field(default=0.9, ge=0)]
     betas2: Annotated[float, Field(default=0.99, ge=0)]
 
 
-class OptimConfig(BaseConfig):
-    """Configures the optimizer."""
+class CheckpointConfig(BaseConfig):
+    """Configures checkpointing the full model, optimizer and training state for resuming training."""
 
-    # The optimizer configuration
-    optim: AdamConfig = AdamConfig()
+    path: Annotated[Path, Field(default=Path("checkpoints"))]
 
-    batch_size: Annotated[int, Field(default=512)]
-    grad_norm_clip: Annotated[float, Field(default=1.0)]
-
-
-class TrainConfig(BaseConfig):
-    """Configures general training parameters."""
-
-    micro_bs: Annotated[int, Field(default=1)]
-    ac_ckpt: Annotated[bool | int, Field(default=False)]
-    reshard_after_forward: Annotated[bool, Field(default=True)]
-    memory_profile: Annotated[str | None, Field(default=None)]
-    torch_compile: Annotated[bool, Field(default=False)]  # Disabled bc too unstable atm
-    liger_qwen: Annotated[bool, Field(default=False)]
-    attn_impl: Annotated[AttnImpl, Field(default="flash_attention_2")]
-
-
-class CkptConfig(BaseConfig):
-    """Configures checkpointing"""
-
-    path: Annotated[str | None, Field(default=None)]
-    interval: Annotated[int | None, Field(default=None)]
-    interval_rollout: Annotated[int | None, Field(default=None)]
-    resume: Annotated[str | None, Field(default=None)]
-
-    rollout_path: Annotated[str | None, Field(default=None)]
-    clean_rollout_path: Annotated[bool, Field(default=False)]
-    async_save: Annotated[
+    clean: Annotated[
         bool,
         Field(
             default=False,
-            description="Enable async checkpointing. Checkpoint will first be move from GPU to CPU and then write to disk in a async way.",
+            description="Whether to clean the path at the beginning of the run. If True, will delete the entire directory.",
         ),
     ]
 
-    @model_validator(mode="after")
-    def check_path_and_interval(self):
-        if (self.path is None) != (self.interval is None):
-            raise ValueError("path and interval must be either both None or both not None")
-        return self
+    interval: Annotated[int, Field(default=50, ge=1, description="Interval at which to save the checkpoint.")]
+
+    resume_path: Annotated[
+        Path | None,
+        Field(
+            default=None,
+            description="Checkpoint path to resume training from. If None, will start from scratch.",
+        ),
+    ]
+
+
+class WeightCheckpointConfig(BaseConfig):
+    """Configures checkpointing the model weights for updating the inference engines."""
+
+    path: Annotated[
+        Path,
+        Field(
+            default=Path("weights"),
+            description="Path to write weights to. Will write to `{path}/step_{step}` at every training step, which will be read by the orchestrator to update the inference engines.",
+        ),
+    ]
+
+    interval: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Interval of checkpoints to save. If None, will automatically delete weight checkpoints that are more than `max_async_level` steps old. This is useful to keep some weight-only checkpoints for online evals.",
+        ),
+    ]
+
+    save_async: Annotated[
+        bool,
+        Field(
+            default=False,
+            description="Whether to save the checkpoint asynchronously.",
+        ),
+    ]
 
 
 class BaseGRPOVariantConfig(BaseConfig):
@@ -93,45 +134,36 @@ GRPOVariantsConfig: TypeAlias = Union[ClippingConfig, RatioConfig]
 class GRPOLossConfig(BaseConfig):
     """Configures the GRPO loss."""
 
-    # The GRPO variant configuration
-    off_policy: GRPOVariantsConfig = RatioConfig()
+    variant: Annotated[GRPOVariantsConfig, Field(default=RatioConfig())]
 
-    kl_coef: Annotated[float | None, Field(default=None)]
+    max_norm: Annotated[float, Field(default=1.0, ge=0, description="Maximum gradient norm to clip.")]
 
-
-class ModelConfig(BaseConfig):
-    """Configures the model to be used for training."""
-
-    name: Annotated[
-        str,
-        Field(
-            default="Qwen/Qwen3-0.6B",
-            description="Name or path of the HF model to use.",
-        ),
+    normalize_to_token_count: Annotated[
+        bool, Field(default=True, description="Whether to normalize the batch to token count.")
     ]
 
 
-CollateMode: TypeAlias = Literal["packing", "padding", "balancing"]
+class FakeDataLoaderConfig(BaseConfig):
+    """Configures a fake data loader sampling random micro batches for debugging."""
+
+    micro_batch_size: Annotated[int, Field(default=8, ge=1)]
+    batch_size: Annotated[int, Field(default=8, ge=1)]
+    seq_len: Annotated[int, Field(default=128, ge=1)]
+
+    @model_validator(mode="after")
+    def validate_batch_size(self):
+        if self.batch_size % self.micro_batch_size != 0:
+            raise ValueError("Batch size must be divisible by micro batch size")
+        if self.batch_size < self.micro_batch_size:
+            raise ValueError("Batch size must be greater than or equal to micro batch size")
 
 
-class DataConfig(BaseConfig):
+class DataLoaderConfig(BaseConfig):
+    """Configures the data loader used for training."""
+
     path: Annotated[Path, Field(default=Path("rollouts"))]
-    seq_length: Annotated[int, Field(default=1024)]
-    fake: Annotated[bool, Field(default=False)]
 
-
-class PathConfig(BaseConfig):
-    """Configures a path used for input/ output operations"""
-
-    path: Annotated[Path, Field(description="Path to write to.")]
-
-    clean: Annotated[
-        bool,
-        Field(
-            default=True,
-            description="Whether to clean the at the beginning of the run.",
-        ),
-    ]
+    fake: Annotated[FakeDataLoaderConfig | None, Field(default=None)]
 
 
 class LogConfig(BaseConfig):
@@ -166,22 +198,22 @@ class Config(BaseSettings):
     """Configures training"""
 
     # The model configuration
-    model: ModelConfig = ModelConfig()
-
-    # The training configuration
-    train: TrainConfig
-
-    # The optimizer configuration
-    optim: OptimConfig = OptimConfig()
-
-    # The checkpoint configuration
-    ckpt: CkptConfig = CkptConfig()
+    model: Annotated[ModelConfig, Field(default=ModelConfig())]
 
     # The data configuration
-    data: DataConfig = DataConfig()
+    data: Annotated[DataLoaderConfig, Field(default=DataLoaderConfig())]
 
-    # The GRPO loss configuration
-    grpo: GRPOLossConfig = GRPOLossConfig()
+    # The optimizer configuration
+    optim: Annotated[OptimizerConfig, Field(default=OptimizerConfig())]
+
+    # The checkpoint configuration
+    ckpt: Annotated[CheckpointConfig, Field(default=CheckpointConfig(path="checkpoints", clean=True))]
+
+    # The weight checkpoint configuration
+    weights: Annotated[WeightCheckpointConfig, Field(default=WeightCheckpointConfig())]
+
+    # The loss configuration
+    loss: Annotated[GRPOLossConfig, Field(default=GRPOLossConfig())]
 
     # The logging configuration
     log: LogConfig = LogConfig()
@@ -189,24 +221,29 @@ class Config(BaseSettings):
     # The monitor configuration
     monitor: MultiMonitorConfig = MultiMonitorConfig()
 
-    gpus_ids: Annotated[list[int] | None, Field(default=None)]
+    max_steps: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Maximum number of steps to run training for. If None, will run indefinitely.",
+        ),
+    ]
 
-    max_async_level: Annotated[int, Field(default=2, ge=1)]
+    async_level: Annotated[
+        int,
+        Field(
+            default=2,
+            ge=0,
+            description="Maximum number of steps that inference can be ahead of training. Determines how 'off-policy' the inference engines can be. Higher values yield better throughput through async execution, but may yield lower powerofrmance. If 0, will be fully synchronous.",
+        ),
+    ]
 
-    collate_mode: Annotated[CollateMode, Field(default="padding")]
+    profile_path: Annotated[Path | None, Field(default=None, description="Path to write memory profile to.")]
 
-    start_step: Annotated[int, Field(default=0, ge=0, description="Step to start training from.")]
-
-    start_total_samples: Annotated[int | None, Field(default=None)]
-
-    stop_after_steps: Annotated[int | None, Field(default=None)]
-
-    normalize_batch_to_token_count: Annotated[bool, Field(default=True)]
-
-    recompute_logprobs: Annotated[bool, Field(default=True)]
-
-    @model_validator(mode="after")
-    def check_liger(self):
-        if self.train.liger_qwen:
-            assert "Qwen" in self.model.name, "train.liger_qwen can only be applied to Qwen2 models."
-        return self
+    recompute_logprobs: Annotated[
+        bool,
+        Field(
+            default=True,
+            description="Whether to recompute the logprobs. If True, will always recompute logprobs and overwrite those potentially found in the training batch.",
+        ),
+    ]

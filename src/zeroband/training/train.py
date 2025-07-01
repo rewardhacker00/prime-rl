@@ -3,428 +3,327 @@ import os
 import shutil
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import shardcast
 import torch
-import torch.distributed as dist
-import torch.distributed.tensor
 from jaxtyping import Float
-from liger_kernel.transformers import apply_liger_kernel_to_qwen2
 from torch._guards import log as torch_log
-from torch.distributed.fsdp import MixedPrecisionPolicy, fully_shard
 
 from zeroband.training import envs
-from zeroband.training.checkpoint import (
+from zeroband.training.ckpt import (
     TrainingProgress,
-    load_checkpoint_fsdp_state,
-    save_checkpoint_fsdp_state,
-    save_ckpt_for_rollout,
+    load_full_checkpoint,
+    save_full_checkpoint,
+    save_weight_checkpoint,
 )
-from zeroband.training.data import FakeDataLoader, DataLoader
 from zeroband.training.config import Config as TrainingConfig
+from zeroband.training.data import DataLoader, FakeDataLoader
 from zeroband.training.logger import setup_logger
-from zeroband.training.loss import entropy_loss, grpo_loss, selective_log_softmax
+from zeroband.training.loss import compute_logprobs, entropy_loss, grpo_loss
+from zeroband.training.metrics import BatchMetrics
+from zeroband.training.model import get_tokenizer, reshard_module, setup_model
+from zeroband.training.perf import get_perf_counter
 from zeroband.training.utils import (
-    MetricsAverager,
     OffloadedTensor,
-    PerfCounter,
-    apply_ac_ckpt,
     copy_model_to_cpu,
     offload_model_to_cpu,
-    reshard_module,
     wake_up_model_from_cpu,
 )
-from zeroband.training.world_info import WorldInfo, get_world_info
-from zeroband.utils.models import ModelType, get_model_and_tokenizer
+from zeroband.training.world import get_world
 from zeroband.utils.monitor import setup_monitor
 from zeroband.utils.pydantic_config import parse_argv
 from zeroband.utils.utils import clean_exit
 
 
-def get_local_batch_size(batch_size: int, micro_bs: int, world_info: WorldInfo) -> int:
-    assert batch_size % world_info.world_size == 0
-    batch_size = batch_size // world_info.world_size
-
-    assert batch_size % micro_bs == 0, str(
-        f"The micro batch size ({micro_bs}) must divide the number of samples on each GPU ({batch_size})"
-    )
-
-    return batch_size
-
-
-def apply_fsdp(model: ModelType, reshard_after_forward: bool):
-    mp_policy = MixedPrecisionPolicy(param_dtype=torch.bfloat16, reduce_dtype=torch.float32)
-
-    for layer_id, transformer_block in enumerate(model.model.layers):
-        if reshard_after_forward:
-            layer_reshard_after_forward = layer_id < len(model.model.layers) - 1
-        else:
-            layer_reshard_after_forward = False
-        fully_shard(
-            transformer_block,
-            mp_policy=mp_policy,
-            reshard_after_forward=layer_reshard_after_forward,
-        )
-    fully_shard(model, mp_policy=mp_policy, reshard_after_forward=reshard_after_forward)
-
-
-def get_device_placement(gpus_ids: list[int] | None, world_info: WorldInfo) -> int:
-    """handle using a subset of GPUs. Should work like the CUDA_VISIBLE_DEVICES env var.
-    The reason we use this is because in the rl launcher, torch is initialized before the env var is set, so we cannot use the CUDA_VISIBLE_DEVICES env var.
-    """
-    if gpus_ids is None:
-        return world_info.local_rank
-
-
-def get_logprobs(
-    model: ModelType,
-    input_ids: torch.Tensor,
-    position_ids: torch.Tensor,
-    temperature: float,
-) -> torch.Tensor:
-    logits: Float[torch.Tensor, "batch seq vocab"] = model(
-        input_ids=input_ids, position_ids=position_ids
-    ).logits.contiguous()
-
-    input_ids_shifted = input_ids[:, 1:]
-    logits_shifted = logits[:, :-1, :] / temperature
-    logprobs = selective_log_softmax(logits_shifted, input_ids_shifted)
-    del logits, logits_shifted
-    return logprobs
-
-
 @clean_exit
 def train(config: TrainingConfig):
-    if "ZERO_BAND_DEV" not in os.environ:
-        torch_log.setLevel(logging.CRITICAL)
+    # Get world info as populated by torchrun
+    world = get_world()
 
-    world_info = get_world_info()
-    logger = setup_logger(config.log, world_info)
-
-    if config.ckpt.clean_rollout_path and config.ckpt.rollout_path is not None:
-        logger.info(f"Cleaning rollout path {config.ckpt.rollout_path}")
-        shutil.rmtree(config.ckpt.rollout_path, ignore_errors=True)
-
-    logger.info(f"start training on {world_info.world_size} rank(s)")
-
-    # Allow eager fallback during production so that training runs don't die if compile fails
-    torch._dynamo.config.suppress_errors = "ZERO_BAND_DEV" not in os.environ  # type: ignore
-    torch.set_float32_matmul_precision("high")
-    torch.manual_seed(42)
-
-    torch.cuda.set_device(get_device_placement(config.gpus_ids, world_info))
-
-    local_batch_size = get_local_batch_size(config.optim.batch_size, config.train.micro_bs, world_info)
-
-    if config.ckpt.rollout_path is not None and world_info.rank == 0:
-        if envs.SHARDCAST_OUTPUT_DIR is not None:
-            shardcast.initialize(
-                envs.SHARDCAST_OUTPUT_DIR,
-                max_distribution_folders=config.max_async_level,
-            )
-
-    model, tokenizer = get_model_and_tokenizer(config.model.name, config.train.attn_impl)
-
-    perf_counter = PerfCounter(window_size=10, model=model, seq_len=config.data.seq_length)
-
-    if config.train.liger_qwen:
-        apply_liger_kernel_to_qwen2(
-            rope=True,
-            rms_norm=True,
-            swiglu=True,
-            model=model,
-        )
-
-    if config.train.ac_ckpt:
-        num = 1 if isinstance(config.train.ac_ckpt, bool) else config.train.ac_ckpt
-        apply_ac_ckpt(model, num)
-
-    apply_fsdp(model, config.train.reshard_after_forward)
-
-    if config.recompute_logprobs:
-        model_for_logprob_only, _ = get_model_and_tokenizer(config.model.name, config.train.attn_impl)
-        apply_fsdp(model_for_logprob_only, config.train.reshard_after_forward)
-
-    optimizer = torch.optim.AdamW(
-        params=model.parameters(),
-        lr=config.optim.optim.lr,
-        weight_decay=config.optim.optim.weight_decay,
-        betas=(config.optim.optim.betas1, config.optim.optim.betas2),
-    )
-
-    total_samples = config.start_total_samples if config.start_total_samples is not None else 0
-    training_progress = TrainingProgress(total_tokens=0, step=config.start_step, total_samples=total_samples)
+    # Setup logger
+    logger = setup_logger(config.log, world)
+    logger.info(f"Starting trainer on rank {world.rank} and local rank {world.local_rank} ({world.world_size} rank(s)")
 
     # Setup the monitor
     monitor = setup_monitor(config.monitor, run_config=config)
 
-    if config.train.torch_compile:
-        model = torch.compile(model) if not TYPE_CHECKING else model
+    # Optionally, clean the checkpoints path
+    if config.ckpt.clean:
+        logger.info(f"Cleaning checkpoint path {config.ckpt.path}")
+        shutil.rmtree(config.ckpt.path, ignore_errors=True)
 
-        if config.recompute_logprobs:
-            model_for_logprob_only: ModelType = torch.compile(model_for_logprob_only)
+    # TODO(Mika): Move this to typed env var
+    # Allow eager fallback during production so that training runs don't die if compile fails
+    if "ZERO_BAND_DEV" not in os.environ:
+        torch_log.setLevel(logging.CRITICAL)
+        torch._dynamo.config.suppress_errors = True
 
-    tensor_offloaded_repository: dict[int, OffloadedTensor] = {}
+    torch.set_float32_matmul_precision("high")
 
+    if config.weights.path and world.rank == 0:
+        if envs.SHARDCAST_OUTPUT_DIR is not None:
+            shardcast.initialize(
+                envs.SHARDCAST_OUTPUT_DIR,
+                max_distribution_folders=config.async_level + 1,
+            )
+
+    # Initialize the model and tokenizer
+    model = setup_model(config.model)
+    tokenizer = get_tokenizer(config.model)
+
+    # Optionally, initialize a model to compute logprobs
     if config.recompute_logprobs:
-        tensor_offloaded_repository[0] = offload_model_to_cpu(model_for_logprob_only)
+        logprob_model = setup_model(config.model)
 
-    if config.ckpt.resume:
-        logger.info(f"loading checkpoint from {config.ckpt.resume}")
-        load_checkpoint_fsdp_state(model, [optimizer], training_progress, config.ckpt.resume)
+        # Offload the logprob model to CPU
+        tensor_offloaded_repository: dict[int, OffloadedTensor] = {}
+        tensor_offloaded_repository[0] = offload_model_to_cpu(logprob_model)
 
+    # Set up the optimizer
+    optimizer = torch.optim.AdamW(
+        params=model.parameters(),
+        lr=config.optim.lr,
+        weight_decay=config.optim.weight_decay,
+        betas=(config.optim.betas1, config.optim.betas2),
+    )
+
+    # TODO(Mika): Add this back but without dependency on the seq_len
+
+    # Optionally, resume training from a checkpoint
+    progress = TrainingProgress(total_tokens=0, step=0, total_samples=0)
+    if config.ckpt.resume_path:
+        logger.info(f"Resuming training from checkpoint {config.ckpt.resume_path}")
+        load_full_checkpoint(model, [optimizer], progress, config.ckpt.resume_path)
+
+    # Set up the data loader (Optionally, use a fake data loader for debugging)
+    dataloader = DataLoader(config.data.path, progress.step)
     if config.data.fake:
-        train_dataloader = FakeDataLoader(
-            config.data.seq_length, tokenizer.pad_token_id, config.train.micro_bs, local_batch_size
-        )
-    else:
-        train_dataloader = DataLoader(config.data.path, config.start_step)
-
-    previous_ckpt_rollout = []
+        dataloader = FakeDataLoader(config.data.fake)
 
     logger.info("Starting training loop")
-
+    active_weight_checkpoint_paths: list[Path] = []
     while True:
-        time_start = time.time()
-        logger.info(f"start training step {training_progress.step}")
+        train_step_start_time = time.time()
+        logger.info(f"Starting training step {progress.step}")
 
-        micro_batches = train_dataloader.get_batch()
-        time_data_loading = time.time() - time_start
+        # Load the training batch
+        load_data_start_time = time.time()
+        micro_batches = dataloader.get_batch()
+        load_data_time = time.time() - load_data_start_time
+        logger.info(f"Loaded batch in {load_data_time:.2f} seconds")
 
-        # here we want to pre-compute the logprobs with the model before update
-        time_logprob_start = time.time()
-        with torch.no_grad():
-            if config.recompute_logprobs:
-                og_infer_step = training_progress.step - config.max_async_level
-                infer_step = max(og_infer_step, 0)
-                wake_up_model_from_cpu(model_for_logprob_only, tensor_offloaded_repository[infer_step])
+        # Optionally, Compute the logprobs for the training batch
+        compute_logprobs_time = 0
+        if config.recompute_logprobs:
+            logger.info(f"Starting recomputing logprobs for step {progress.step}")
+            compute_logprobs_start_time = time.time()
+            og_infer_step = progress.step - config.async_level
+            infer_step = max(og_infer_step, 0)
 
-                if og_infer_step == infer_step:
-                    del tensor_offloaded_repository[infer_step]
+            # Wake up the logprob model from CPU
+            wake_up_model_from_cpu(logprob_model, tensor_offloaded_repository[infer_step])
+            if og_infer_step == infer_step:
+                del tensor_offloaded_repository[infer_step]
 
-            logger.info(f"start logprob recomputation step {training_progress.step}")
+            with torch.no_grad():
+                num_micro_batches = len(micro_batches)
+                for micro_step, micro_batch in enumerate(micro_batches, start=1):
+                    logger.debug(f"Computing logprobs for micro batch {micro_step} / {num_micro_batches}")
+                    input_ids = micro_batch["input_ids"].to("cuda")
+                    position_ids = micro_batch["position_ids"].to("cuda")
+                    temperature = micro_batch["temperature"]
 
-            num_grad_acc_steps = len(micro_batches)
+                    logprobs = compute_logprobs(logprob_model, input_ids, position_ids, temperature)
+                    micro_batch["logprobs"] = logprobs.to("cpu")
 
-            for grad_acc_step in range(num_grad_acc_steps):
-                batch = micro_batches[grad_acc_step]
+            # here we sepcifically don't save the tensor offloaded, they are alreay consumed and we will never use it again.
+            # this avoid having to make sure we don't keep too much tensor offloaded in cpu memory
+            reshard_module(logprob_model)
+            offload_model_to_cpu(logprob_model)
 
-                # Only compute logprobs if not using vllm logprobs or if the batch doesn't have them
-                if config.recompute_logprobs:
-                    logger.debug(
-                        f"log prob grad_acc_step {grad_acc_step} / {num_grad_acc_steps}, batch: {batch['input_ids'].shape}"
-                    )
+            compute_logprobs_time = time.time() - compute_logprobs_start_time
+            logger.info(f"Computed logprobs in {compute_logprobs_time:.2f} seconds")
 
-                    input_ids = batch["input_ids"].to("cuda")
-
-                    model_for_logprob = model_for_logprob_only if config.recompute_logprobs else model
-                    per_token_logps = get_logprobs(
-                        model_for_logprob, input_ids, batch["position_ids"], batch["temperature"]
-                    )
-
-                    batch["logprobs"] = per_token_logps.to("cpu")
-
-            if config.recompute_logprobs:
-                # here we sepcifically don't save the tensor offloaded, they are alreay consumed and we will never use it again.
-                # this avoid having to make sure we don't keep too much tensor offloaded in cpu memory
-                reshard_module(model_for_logprob_only)
-                offload_model_to_cpu(model_for_logprob_only)
-
-        time_logprobs = time.time() - time_logprob_start
-        time_data_and_logprob = time.time() - time_start
-        logger.info(f"Time to compute logprobs and data preprocessing: {time_data_and_logprob:.2f} seconds")
-        logger.debug(f"Time to data loading: {time_data_loading:.2f} seconds")
-        logger.debug(f"Time to logprob computation: {time_logprobs:.2f} seconds")
-
-        metric_averager = MetricsAverager()
-        loss_batch = torch.tensor(0.0, device="cuda")
-
-        if config.train.memory_profile and world_info.rank == 0:
+        if config.profile_path and world.rank == 0:
             torch.cuda.memory._record_memory_history()
 
-        num_grad_acc_steps = len(micro_batches)
+        batch_metrics = BatchMetrics()
+        num_micro_batches = len(micro_batches)
+        for micro_step, micro_batch in enumerate(micro_batches, start=1):
+            logger.debug(f"Training on micro batch {micro_step} / {num_micro_batches}")
+            input_ids = micro_batch["input_ids"].to("cuda")
+            position_ids = micro_batch["position_ids"].to("cuda")
+            advantages = micro_batch["advantages"].to("cuda")
+            loss_mask = (
+                torch.ones_like(input_ids).int().to("cuda")
+            )  # TODO(Mika): Remove this from loss computation, then here
+            logprobs = micro_batch["logprobs"].to("cuda")
+            temperature = micro_batch["temperature"]
+            total_tokens = micro_batch["total_tokens"]
+            micro_batch_size, seq_len = input_ids.shape
 
-        for grad_acc_step in range(num_grad_acc_steps):
-            logger.debug(f"training grad_acc_step {grad_acc_step} / {num_grad_acc_steps}")
-            batch = micro_batches[grad_acc_step]
+            # Optionally, normalize the loss to the token count
+            max_tokens = micro_batch_size * seq_len
+            if config.loss.normalize_to_token_count:
+                max_tokens = int(total_tokens)
 
-            input_ids = batch["input_ids"].to("cuda")
-            if config.normalize_batch_to_token_count:
-                max_tokens = int(batch["total_tokens"])
-            else:
-                max_tokens = input_ids.shape[0] * input_ids.shape[1]
-
-            loss_mask = batch["loss_mask"]
-
-            # Forward
+            # Forward pass
+            logger.debug(f"Forwarding on micro batch {micro_step} / {num_micro_batches}")
             logits: Float[torch.Tensor, "batch seq vocab"] = model(
-                input_ids=input_ids, position_ids=batch["position_ids"]
+                input_ids=input_ids, position_ids=position_ids
             ).logits.contiguous()
 
-            # Gather args for grpo loss
-            advantages = batch["advantages"].to("cuda")
-            loss_mask = loss_mask.int().to("cuda")
-            original_logprobs = batch["logprobs"].to("cuda")
-
-            # Loss
-
+            # Compute loss
             loss, clip_ratio = grpo_loss(
                 logits,
                 input_ids,
                 advantages,
-                original_logprobs,
+                logprobs,
                 loss_mask,
-                batch["temperature"],
+                temperature,
                 max_tokens,
-                config.grpo.off_policy,
+                config.loss.variant,
             )
 
+            # Compute the entropy
             with torch.no_grad():
-                entropy = entropy_loss(logits, loss_mask, batch["temperature"], max_tokens)
+                logger.debug(f"Computing entropy on micro batch {micro_step} / {num_micro_batches}")
+                entropy = entropy_loss(logits, loss_mask, temperature, max_tokens)
 
-            loss = loss / num_grad_acc_steps
+            # Now we can delete the micro batch CUDA tensors
+            del logits, input_ids, position_ids, advantages, loss_mask, logprobs
 
-            inputs_ids_shape = input_ids.shape
+            # Scale the loss by the number of micro batches (=gradient accumulation steps)
+            loss = loss / num_micro_batches
 
-            # Now we can delete the batch data
-            del batch, logits, input_ids, advantages, loss_mask, original_logprobs
-
-            # Backward
+            # Backward pass (ensures loss reduction across FSDP ranks)
+            logger.debug(f"Backward pass on micro batch {micro_step} / {num_micro_batches}")
             loss.backward()
-            loss_batch += loss.detach().clone()
 
-            metric_averager.update("losses/entropy_loss", entropy.detach().clone())
+            batch_metrics.update("loss/loss", loss.detach().clone())
+            batch_metrics.update("loss/entropy", entropy.detach().clone())
+            batch_metrics.update("loss/clip_ratio", clip_ratio.detach().clone())
 
-            if clip_ratio is not None:
-                metric_averager.update("losses/clip_ratio", clip_ratio.detach().clone())
+            logger.debug(
+                f"Finished training on micro batch {micro_step} / {num_micro_batches} (loss: {loss.item():.2f}, entropy: {entropy.item():.2f}, clip_ratio: {clip_ratio.item():.2f})"
+            )
 
             del loss, entropy, clip_ratio
 
-        metric_averager.sync()
+        # Synchronize the batch metrics across all ranks
+        logger.info("Synchronizing batch metrics across all ranks")
+        batch_metrics.sync()
 
-        dist.all_reduce(loss_batch, op=dist.ReduceOp.AVG)
+        # Optionally, clip the gradients
+        logger.info(f"Clipping gradients with max norm {config.loss.max_norm}")
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.loss.max_norm).full_tensor()  # type: ignore (is a dtensor)
+        batch_metrics.update("loss/grad_norm", grad_norm.detach().clone())
 
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.optim.grad_norm_clip).full_tensor()  # type: ignore (is a dtensor)
-
-        logger.debug(f"loss: {loss_batch.item()}, grad_norm: {grad_norm.item()}")
-
+        # Update the model parameters
+        logger.info("Updating model parameters")
         optimizer.step()
         optimizer.zero_grad()
+        progress.step += 1
 
-        logger.debug("optimizer step")
-
-        training_progress.step += 1
-        inner_lr = [group["lr"] for group in optimizer.param_groups][0]
-
-        token_per_gpu = inputs_ids_shape[0] * inputs_ids_shape[1] * num_grad_acc_steps
-        new_tokens = world_info.world_size * token_per_gpu
-        perf_counter.count_tokens(new_tokens)
-        training_progress.total_tokens += new_tokens
-        training_progress.total_samples += config.optim.batch_size
-
-        metrics = {
-            "step": training_progress.step,
-            "losses/Loss": loss_batch.item(),
-            "train/inner_lr": inner_lr,
-            "train/total_tokens": training_progress.total_tokens,
-            "train/total_samples": training_progress.total_samples,
-            "losses/grad_norm": grad_norm.item(),
+        # Update progress
+        num_local_tokens = micro_batch_size * seq_len * num_micro_batches
+        num_tokens = world.world_size * num_local_tokens
+        batch_size = micro_batch_size * num_micro_batches
+        progress.total_tokens += num_tokens
+        progress.total_samples += batch_size
+        # Log progress metrics
+        progress_metrics = {
+            "step": progress.step,
+            "progress/num_tokens": progress.total_tokens,
+            "progress/num_samples": progress.total_samples,
         }
+        if world.rank == 0:
+            monitor.log(progress_metrics)
 
-        for key, value in metric_averager.items():
-            metrics[key] = value.item()
+        # Update the performance counter
+        perf_counter = get_perf_counter(model, seq_len)
+        perf_counter.count_tokens(num_tokens)
 
-        log = f"step: {training_progress.step}, loss: {loss_batch.item():.4f}, "
+        # Loss loss metrics
+        loss_metrics = {key: value.item() for key, value in batch_metrics.items()}
+        if world.rank == 0:
+            monitor.log(loss_metrics)
 
-        del loss_batch, grad_norm
+        # Log Performance metrics
+        tokens_per_second = perf_counter.get_tokens_per_second() or 0
+        mfu = perf_counter.get_mfu() or 0
+        tokens_per_second_per_gpu = tokens_per_second / world.world_size
+        perf_metrics = {
+            "step": progress.step,
+            "perf/tokens_per_second": tokens_per_second,
+            "perf/tokens_per_second_per_gpu": tokens_per_second_per_gpu,
+            "perf/mfu": mfu,
+        }
+        if world.rank == 0:
+            monitor.log(perf_metrics)
 
-        tokens_per_second = perf_counter.get_tokens_per_second()
-        if tokens_per_second is not None:
-            tokens_per_second_per_gpu = tokens_per_second / world_info.world_size
-            mfu = perf_counter.get_mfu()
-            metrics.update(
-                {
-                    "perf/tokens_per_second": tokens_per_second,
-                    "perf/tokens_per_second_per_gpu": tokens_per_second_per_gpu,
-                    "perf/mfu": mfu,
-                }
-            )
+        # Save the weight checkpoint
+        step_path = Path(config.weights.path) / f"step_{progress.step}"
+        save_weights_start_time = time.time()
+        model_path = save_weight_checkpoint(model, tokenizer, step_path, async_save=config.weights.save_async)
+        active_weight_checkpoint_paths.append(step_path)
+        save_weights_time = time.time() - save_weights_start_time
 
-            log += f", tokens_per_second: {tokens_per_second:.2f}, tokens_per_second_per_gpu: {tokens_per_second_per_gpu:.2f}, mfu: {mfu:.2f}"
+        # Optionally, broadcast the weight checkpoint from master rank
+        if world.rank == 0 and envs.SHARDCAST_OUTPUT_DIR is not None:
+            logger.info(f"Broadcasting {model_path} via shardcast")
+            shardcast.broadcast(model_path)  # TODO: Is this blocking?
 
-        if world_info.rank == 0:
-            monitor.log(metrics)
+        # Optionally, remove old weight checkpoints to save space
+        # +1 to ensure to not delete current checkpoint when async_level=0
+        if len(active_weight_checkpoint_paths) > config.async_level + 1:
+            path_to_delete = active_weight_checkpoint_paths.pop(0)
+            ckpt_step = int(path_to_delete.name.split("_")[-1])
+            should_keep = config.weights.interval and ckpt_step % config.weights.interval == 0
+            if not should_keep:
+                logger.info(f"Removing past weight checkpoint at {path_to_delete}")
+                shutil.rmtree(path_to_delete, ignore_errors=True)
 
-        logger.info(log)
-
-        time_rollout_ckpt = None
-        time_shardcast = None
-        time_rollout_delete = None
-
-        # Lets do this first so that clients can start downloading as soon as possible
-        if config.ckpt.rollout_path is not None:
-            logger.debug("saving rollout ckpt")
-            path = Path(config.ckpt.rollout_path) / f"step_{training_progress.step}"
-            previous_ckpt_rollout.append(path)
-            t0 = time.time()
-            safetensor_path = save_ckpt_for_rollout(model, tokenizer, path, async_save=config.ckpt.async_save)
-            time_rollout_ckpt = time.time() - t0
-
-            time_shardcast = time.time()
-            if world_info.rank == 0:
-                if envs.SHARDCAST_OUTPUT_DIR is not None:
-                    logger.info(f"Broadcasting {safetensor_path}")
-                    shardcast.broadcast(safetensor_path)  # TODO: Is this blocking?
-            time_shardcast = time.time() - time_shardcast
-
-            time_rollout_delete = time.time()
-            if len(previous_ckpt_rollout) > config.max_async_level:
-                path_to_delete = previous_ckpt_rollout.pop(0)
-                ckpt_step = int(str(path_to_delete).split("_")[-1])
-
-                should_keep = config.ckpt.interval_rollout is not None and ckpt_step % config.ckpt.interval_rollout == 0
-                if path_to_delete.exists() and not should_keep:
-                    logger.info(f"Removing past rollout ckpt at {path_to_delete}")
-                    shutil.rmtree(path_to_delete, ignore_errors=True)
-            time_rollout_delete = time.time() - time_rollout_delete
-        if config.train.memory_profile and (training_progress.step == 2) and world_info.rank == 0:
-            logger.info("Dumping memory snapshot.")
-            pickle_path: str = config.train.memory_profile
-            if not pickle_path.endswith(".pickle"):
-                pickle_path += ".pickle"
-            torch.cuda.memory._dump_snapshot(pickle_path)
+        # Optionally, dump memory snapshot
+        if config.profile_path and progress.step == 2 and world.rank == 0:
+            logger.info("Dumping memory snapshot")
+            profile_path = config.profile_path
+            if not profile_path.endswith(".pickle"):
+                profile_path += ".pickle"
+            torch.cuda.memory._dump_snapshot(profile_path)
             torch.cuda.memory._record_memory_history(enabled=False)
 
-        if config.ckpt.interval is not None and training_progress.step % config.ckpt.interval == 0:
-            logger.info(f"Saving checkpoint at step {training_progress.step}")
-            save_checkpoint_fsdp_state(model, [optimizer], training_progress, config.ckpt.path)
+        # Optionally, save the full checkpoint
+        save_ckpt_time = 0
+        if config.ckpt and config.ckpt.interval and progress.step % config.ckpt.interval == 0:
+            logger.info(f"Saving checkpoint at step {progress.step}")
+            save_ckpt_start_time = time.time()
+            save_full_checkpoint(model, [optimizer], progress, config.ckpt.path)
+            save_ckpt_time = time.time() - save_ckpt_start_time
 
+        # Update the CPU logprob model to updated model
         if config.recompute_logprobs:
-            reshard_module(model_for_logprob_only)
-            tensor_offloaded_repository[training_progress.step] = copy_model_to_cpu(model)
+            reshard_module(logprob_model)
+            tensor_offloaded_repository[progress.step] = copy_model_to_cpu(model)
 
-        time_rollout_step = time.time() - time_start
-        logger.success(f"Finished training step {training_progress.step} in {time_rollout_step:.2f}s")
-        if world_info.rank == 0:
-            time_metrics = {
-                "step": training_progress.step,
-                "perf/time_rollout_step": time_rollout_step,
-                "perf/time_logprob": time_logprobs,
-                "perf/time_data_loading": time_data_loading,
-                "perf/time_data_preprocessing": time_data_and_logprob,
-                "perf/time_rollout_delete": time_rollout_delete,
-            }
-            if time_rollout_ckpt is not None:
-                time_metrics["perf/time_rollout_ckpt"] = time_rollout_ckpt
-            if time_shardcast is not None:
-                time_metrics["perf/time_shardcast"] = time_shardcast
-            if time_rollout_delete is not None:
-                time_metrics["perf/time_rollout_delete"] = time_rollout_delete
+        train_step_time = time.time() - train_step_start_time
+        logger.success(
+            f"Finished training step {progress.step} in {train_step_time:.2f}s (Loss: {loss_metrics['loss/loss']:.2f}, Entropy: {loss_metrics['loss/entropy']:.2f}, Clip Ratio: {loss_metrics['loss/clip_ratio']:.2f}, Throughput: {tokens_per_second:.2f} tokens/s, MFU: {mfu:.2f}%)"
+        )
 
+        # Log time metrics
+        time_metrics = {
+            "step": progress.step,
+            "time/step": train_step_time,
+            "time/load_data": load_data_time,
+            "time/save_weights": save_weights_time,
+            "time/compute_logprobs": compute_logprobs_time,
+            "time/save_ckpt": save_ckpt_time,
+        }
+        if world.rank == 0:
             monitor.log(time_metrics)
 
-        if config.stop_after_steps is not None and training_progress.step >= config.stop_after_steps:
+        if config.max_steps and progress.step >= config.max_steps:
             break
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
