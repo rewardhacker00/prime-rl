@@ -1,6 +1,5 @@
 import asyncio
 import json
-import math
 import shutil
 import time
 from multiprocessing.queues import Queue
@@ -97,7 +96,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
     dataset = dataset.shuffle(seed=config.seed)
 
     # Iterate over dataset in batches
-    max_steps = config.max_steps or math.inf
+    max_steps = config.max_steps or int(1e9)
     steps_per_epoch = len(dataset) // (config.batch_size // config.sampling.n)
     logger.info(f"Starting training loop (max_steps={max_steps}, steps_per_epoch={steps_per_epoch})")
     total_tokens, total_samples = 0, 0
