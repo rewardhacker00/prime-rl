@@ -163,7 +163,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         generate_completions_start_time = time.time()
         input_tokens = await asyncio.gather(*(tokenize(client, config.model, messages) for messages in batch_messages))
         chat_completions = await asyncio.gather(
-            *(generate_completion(client, config.model, config.sampling, messages) for messages in batch_messages)
+            *(generate_completion(client, config.model, config.sampling, messages, len(input_tokens)) for messages, input_tokens in zip(batch_messages, input_tokens))
         )
         generate_completions_time = time.time() - generate_completions_start_time
 

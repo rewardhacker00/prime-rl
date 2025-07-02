@@ -76,6 +76,14 @@ class SamplingConfig(BaseConfig):
         ),
     ]
 
+    max_seq_len: Annotated[
+        int | None,
+        Field(
+            default=None,
+            description="Maximum number of input and output tokens allowed before aborting a generation. If set, it will dynamically override the `max_tokens` sampling arg based on the number of input tokens of the particular request. The argument is comparable to the `max_model_len` server parameter in vLLM, but moved to the client to allow for dynamic model contexts.",
+        ),
+    ]
+
     max_tokens: Annotated[
         int | None,
         Field(
