@@ -1,6 +1,6 @@
 import asyncio
 
-from zeroband.eval.config import Config as EvalConfig
+from zeroband.eval.config import EvalConfig
 from zeroband.eval.utils import run_benchmark
 from zeroband.training.orchestrator.client import (
     check_has_model,

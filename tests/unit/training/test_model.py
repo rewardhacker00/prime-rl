@@ -1,27 +1,42 @@
 import pytest
 import torch
 
-from zeroband.utils.models import get_model_and_tokenizer
+from zeroband.training.config import AttnImplementation, ModelConfig
+from zeroband.training.model import get_model
 
 BS = 1
 SEQ_LEN = 8
 
-pytestmark = [pytest.mark.gpu]
+pytestmark = [
+    pytest.mark.gpu,
+    pytest.mark.filterwarnings("ignore:torch.get_autocast_gpu_dtype\\(\\) is deprecated:DeprecationWarning"),
+]
 
 
-def test_model_forward_gpu():
-    model, tokenizer = get_model_and_tokenizer("Qwen/Qwen3-0.6B", "flash_attention_2")
-    assert model is not None
-    assert tokenizer is not None
+@pytest.fixture(params=["sdpa", "flash_attention_2"])
+def attn(request) -> AttnImplementation:
+    """
+    Fixture to test different attention implementations.
+    """
+    try:
+        # ruff: noqa: F401
+        import flash_attn
+    except ImportError:
+        pytest.skip("Flash Attention not available")
+    return request.param
 
+
+@pytest.fixture
+def model(attn):
+    config = ModelConfig(name="Qwen/Qwen3-0.6B", attn=attn)
+    return get_model(config)
+
+
+def test_model_to_gpu(model):
     model = model.to("cuda")
 
 
-def test_model_forward(model_name, attn_impl):
-    model, tokenizer = get_model_and_tokenizer(model_name, attn_impl)
-    assert model is not None
-    assert tokenizer is not None
-
+def test_model_forward(model):
     model = model.to("cuda")
     with torch.autocast("cuda", dtype=torch.bfloat16):
         inputs_ids = torch.randint(0, 100, (BS, SEQ_LEN)).to("cuda")
@@ -30,11 +45,7 @@ def test_model_forward(model_name, attn_impl):
         assert outputs.shape == (BS, SEQ_LEN, model.config.vocab_size)
 
 
-def test_model_with_position_ids(model_name, attn_impl):
-    model, tokenizer = get_model_and_tokenizer(model_name, attn_impl)
-    assert model is not None
-    assert tokenizer is not None
-
+def test_model_with_position_ids(model):
     model = model.to("cuda")
     with torch.autocast("cuda", dtype=torch.bfloat16):
         inputs_ids = torch.randint(0, 100, (BS, SEQ_LEN)).to("cuda")
@@ -47,7 +58,7 @@ def test_model_with_position_ids(model_name, attn_impl):
 
 @pytest.mark.skip(reason="Sequence packing for Qwen not working.")
 @pytest.mark.parametrize("correct_position_ids", [True, False])
-def test_model_with_sequence_packing(model_name, attn_impl, correct_position_ids):
+def test_model_with_sequence_packing(model, correct_position_ids):
     """
     The goal of this test is to check that the sequence packing works correctly.
 
@@ -56,11 +67,7 @@ def test_model_with_sequence_packing(model_name, attn_impl, correct_position_ids
     [B, seq]  and doing [1, B*seq] with the proper masking.
 
     """
-    model, tokenizer = get_model_and_tokenizer(model_name, attn_impl)
-    assert model is not None
-    assert tokenizer is not None
-
-    if model.config._attn_implementation != "flash_attention_2":
+    if model.config.attn != "flash_attention_2":
         pytest.skip("Test only works with flash attention")
 
     model = model.to("cuda")

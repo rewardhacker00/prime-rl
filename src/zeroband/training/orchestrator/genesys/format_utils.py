@@ -38,7 +38,7 @@ def extract_last_json(completion: str) -> dict | None:
         return None
     try:
         loaded_json = json.loads(json_str)
-        if type(loaded_json) == dict:
+        if isinstance(loaded_json, dict):
             return loaded_json
         return None
     except json.JSONDecodeError:

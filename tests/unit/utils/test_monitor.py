@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from zeroband.inference.config import Config as InferenceConfig
+from zeroband.training.config import OrchestratorConfig
 from zeroband.utils.config import APIMonitorConfig, FileMonitorConfig, SocketMonitorConfig
 from zeroband.utils.monitor import (
     APIMonitor,
@@ -44,7 +44,7 @@ def test_valid_file_monitor_config(tmp_path):
 def test_valid_file_monitor_config_with_env(tmp_path):
     file_path = tmp_path / "file_monitor.jsonl"
     os.environ["PRIME_MONITOR__FILE__PATH"] = file_path.as_posix()
-    config = InferenceConfig()
+    config = OrchestratorConfig()
     assert config.monitor.file is not None
     assert config.monitor.file.path == file_path
 
@@ -59,7 +59,7 @@ def test_valid_socket_monitor_config(tmp_path):
 def test_valid_socket_monitor_config_with_env(tmp_path):
     socket_path = tmp_path / "socket_monitor.sock"
     os.environ["PRIME_MONITOR__SOCKET__PATH"] = socket_path.as_posix()
-    config = InferenceConfig()
+    config = OrchestratorConfig()
     assert config.monitor.socket is not None
     assert config.monitor.socket.path == socket_path
 
@@ -78,7 +78,7 @@ def test_valid_api_monitor_config_with_env():
     auth_token = "test_token"
     os.environ["PRIME_MONITOR__API__URL"] = url
     os.environ["PRIME_MONITOR__API__AUTH_TOKEN"] = auth_token
-    config = InferenceConfig()
+    config = OrchestratorConfig()
     assert config.monitor.api is not None
     assert config.monitor.api.url == url
     assert config.monitor.api.auth_token == auth_token

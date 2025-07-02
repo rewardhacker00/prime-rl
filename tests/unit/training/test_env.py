@@ -21,9 +21,3 @@ def test_invalid_env_vars():
     """Test that accessing invalid environment variables raises AttributeError"""
     with pytest.raises(AttributeError):
         training_env.INVALID_VAR
-
-
-def test_no_env_mixing():
-    """Test that inference env doesn't have training-specific variables"""
-    with pytest.raises(AttributeError):
-        training_env.SHARDCAST_SERVERS

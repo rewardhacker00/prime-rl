@@ -6,13 +6,13 @@ from tests import Command, Environment, ProcessResult
 
 pytestmark = [pytest.mark.slow, pytest.mark.gpu]
 
-CMD = ["uv", "run", "torchrun", "src/zeroband/train.py", "@configs/training/debug.toml"]
+CMD = ["uv", "run", "train", "@configs/training/debug.toml"]
 
 
 @pytest.fixture(scope="module")
-def process(run_process: Callable[[Command, Environment], ProcessResult]) -> ProcessResult:
+def train_process(run_process: Callable[[Command, Environment], ProcessResult]) -> ProcessResult:
     return run_process(CMD, {})
 
 
-def test_no_error(process: ProcessResult):
-    assert process.returncode == 0, f"Process failed with return code {process.returncode}"
+def test_no_error(train_process: ProcessResult):
+    assert train_process.returncode == 0, f"Train process failed with return code {train_process.returncode}"

@@ -10,7 +10,6 @@ from zeroband.training.orchestrator.genesys.code_output_prediction import (
 from zeroband.training.orchestrator.genesys.complex_json_output import (
     verify_complex_json_formatting,
 )
-from zeroband.training.orchestrator.genesys.deepcoder import verify_deepcoder
 from zeroband.training.orchestrator.genesys.formatask import (
     compute_reward as compute_formatask_reward,
 )
@@ -75,5 +74,4 @@ _REWARD_FUNCTIONS: dict[TaskType, Callable] = {
     "formatask": compute_formatask_reward,
     "kernelbench": assign_kernel_reward,
     "null_reward": null_reward,
-    "deepcoder": verify_deepcoder,
 }

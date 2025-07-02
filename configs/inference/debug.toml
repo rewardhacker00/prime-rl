@@ -1,15 +1,3 @@
-max_steps = 2
-max_batch_size = 16
-clean_rollout_path = true
-rl = "None"
-
-[toploc]
-enable_toploc1 = true
-enable_toploc2 = true
-
 [model]
+max_model_len = 16
 enforce_eager = true
-
-[sampling]
-max_tokens = 16
-n = 2

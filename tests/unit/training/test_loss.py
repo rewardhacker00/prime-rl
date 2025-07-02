@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from zeroband.training.loss import entropy_loss, grpo_loss_clip, grpo_loss_kl_cov, grpo_loss_ratio, kl_penalty
+from zeroband.training.loss import entropy_loss, grpo_loss_clip, grpo_loss_ratio
 
 pytestmark = [pytest.mark.gpu]
 
@@ -50,27 +50,6 @@ def test_grpo_loss_ratio(dtype):
         temperature=0.6,
         max_tokens=100,
         clip_ratio=10.0,
-        highest_entropy_percentage=1.0,
-    )
-
-
-def test_grpo_loss_kl_cov_loss():
-    logits = torch.randn(10, 10, 10, dtype=torch.float32).cuda()
-    input_ids = torch.randint(0, 10, (10, 10)).cuda()
-    advantages = torch.randn(10, 10).cuda()
-    original_logprobs = torch.randn(10, 9, dtype=torch.float32).cuda()
-    loss_mask = torch.ones(10, 10).int().cuda()
-
-    loss, _ = grpo_loss_kl_cov(
-        logits,
-        input_ids,
-        advantages,
-        original_logprobs,
-        loss_mask,
-        temperature=0.6,
-        kl_coef_cov=1.0,
-        k_percent=0.2,
-        max_tokens=100,
         highest_entropy_percentage=1.0,
     )
 
@@ -127,12 +106,3 @@ def test_grpo_loss_padding(dtype):
 
     assert torch.allclose(reward_list[0], reward_list[1])
     assert torch.allclose(loss_list[0], loss_list[1])
-
-
-def test_kl_penalty():
-    logprob = torch.randn(10, 9, dtype=torch.float32).cuda()
-    ref_logprob = torch.randn(10, 9, dtype=torch.float32).cuda()
-    loss_mask = torch.ones(10, 10).int().cuda()
-    kl = kl_penalty(logprob, ref_logprob, loss_mask, 100)
-    assert kl.shape == ()
-    assert kl.item() is not None

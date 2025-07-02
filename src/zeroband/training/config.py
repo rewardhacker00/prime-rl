@@ -169,7 +169,7 @@ class DataLoaderConfig(BaseConfig):
     fake: Annotated[FakeDataLoaderConfig | None, Field(default=None)]
 
 
-class Config(BaseSettings):
+class TrainingConfig(BaseSettings):
     """Configures training"""
 
     # The orchestrator configuration
@@ -234,8 +234,7 @@ class Config(BaseSettings):
             self.orchestrator.model.name = self.model.name
             self.orchestrator.async_level = self.async_level
             self.orchestrator.monitor.wandb = deepcopy(self.monitor.wandb)
-            group = self.monitor.wandb.group
-            if group:
-                self.monitor.wandb.name = f"{group}-train"
-                self.orchestrator.monitor.wandb.name = f"{group}-orchestrator"
+            if self.monitor.wandb and self.monitor.wandb.group:
+                self.monitor.wandb.name = f"{self.monitor.wandb.group}-train"
+                self.orchestrator.monitor.wandb.name = f"{self.monitor.wandb.group}-orchestrator"
         return self

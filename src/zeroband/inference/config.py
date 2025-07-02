@@ -111,7 +111,7 @@ class InferenceConfig(BaseSettings):
         }
 
         for key in get_all_fields(self):
-            value = rgetattr(self, key)
+            value = rgetattr(self, key.replace("-", "_"))
             rsetattr(namespace, to_vllm.get(key, key), value)
 
         return namespace

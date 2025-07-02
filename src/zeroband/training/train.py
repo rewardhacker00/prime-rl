@@ -17,7 +17,7 @@ from zeroband.training.ckpt import (
     save_full_checkpoint,
     save_weight_checkpoint,
 )
-from zeroband.training.config import Config as TrainingConfig
+from zeroband.training.config import TrainingConfig
 from zeroband.training.data import DataLoader, FakeDataLoader
 from zeroband.training.logger import setup_logger
 from zeroband.training.loss import compute_logprobs, entropy_loss, grpo_loss
@@ -226,7 +226,7 @@ def train(config: TrainingConfig):
                 entropy = entropy_loss(logits, loss_mask, temperature, max_tokens)
 
             # Now we can delete the micro batch CUDA tensors
-            del logits, input_ids, position_ids, advantages, loss_mask, logprobs
+            del micro_batch, logits, input_ids, position_ids, advantages, loss_mask, logprobs
 
             # Scale the loss by the number of micro batches (=gradient accumulation steps)
             loss = loss / num_micro_batches
