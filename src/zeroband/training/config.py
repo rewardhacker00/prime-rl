@@ -227,14 +227,9 @@ class TrainingConfig(BaseSettings):
     ]
 
     @model_validator(mode="after")
-    def validate_orchestrator(self):
-        # Ensures that shared configs are consistent between the trainers and orchestrator
-        if self.orchestrator:
-            self.orchestrator.max_steps = self.max_steps
-            self.orchestrator.model.name = self.model.name
-            self.orchestrator.async_level = self.async_level
-            self.orchestrator.monitor.wandb = deepcopy(self.monitor.wandb)
-            if self.monitor.wandb and self.monitor.wandb.group:
-                self.monitor.wandb.name = f"{self.monitor.wandb.group}-train"
-                self.orchestrator.monitor.wandb.name = f"{self.monitor.wandb.group}-orchestrator"
+    def auto_name_wandb(self):
+        # Automatically name the W&B runs if run in group
+        if self.orchestrator and self.monitor.wandb and self.monitor.wandb.group:
+            self.monitor.wandb.name = f"{self.monitor.wandb.group}-train"
+            self.orchestrator.monitor.wandb.name = f"{self.monitor.wandb.group}-orchestrator"
         return self

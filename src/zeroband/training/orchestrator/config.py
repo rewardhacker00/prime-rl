@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 from pydantic import Field, model_validator
 
 from zeroband.eval.registry import Benchmark
-from zeroband.utils.config import LogConfig, ModelConfig, MultiMonitorConfig
+from zeroband.utils.config import LogConfig, ModelConfig, MultiMonitorConfig, SampleLoggingConfig, WandbMonitorConfig
 from zeroband.utils.pydantic_config import BaseConfig, BaseSettings
 
 
@@ -205,7 +205,7 @@ class OrchestratorConfig(BaseSettings):
     log: Annotated[LogConfig, Field(default=LogConfig(path=Path("logs/orchestrator")))]
 
     # The monitor configuration
-    monitor: Annotated[MultiMonitorConfig, Field(default=MultiMonitorConfig())]
+    monitor: Annotated[MultiMonitorConfig, Field(default=MultiMonitorConfig(wandb=WandbMonitorConfig(log_samples=SampleLoggingConfig())))]
 
     collate_mode: Annotated[Literal["packing", "padding"], Field(default="padding")]
 

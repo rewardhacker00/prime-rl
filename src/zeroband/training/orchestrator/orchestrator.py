@@ -36,10 +36,6 @@ from zeroband.utils.monitor import setup_monitor
 from zeroband.utils.pydantic_config import parse_argv
 from zeroband.utils.utils import clean_exit
 
-# TODO: Log samples to wandb
-# TODO: Add reward, seqlen, task specific reward to wandb
-
-
 @clean_exit
 async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = None):
     # Initialize the logger
@@ -60,10 +56,6 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         logger.debug(f"Cleaning weights path ({config.weights.path})")
         shutil.rmtree(config.weights.path, ignore_errors=True)
 
-    # Setup monitor
-    logger.info(f"Initializing monitor ({config.monitor})")
-    monitor = setup_monitor(config.monitor, None, config)
-
     # Setup client
     logger.info(f"Initializing OpenAI client ({config.client.base_url})")
     client = setup_client(config.client)
@@ -71,6 +63,10 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
     # Load tokenizer
     logger.info(f"Initializing tokenizer for {config.model.name}")
     tokenizer = AutoTokenizer.from_pretrained(config.model.name)
+
+    # Setup monitor
+    logger.info(f"Initializing monitor ({config.monitor})")
+    monitor = setup_monitor(config.monitor, None, tokenizer, config)
 
     # Check health of the client
     logger.info("Waiting for inference pool to be ready")
@@ -167,11 +163,15 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         )
         generate_completions_time = time.time() - generate_completions_start_time
 
+        # Parse chat completions responses
+        completions = parse_completions(chat_completions)
+        output_tokens = parse_output_tokens(chat_completions)
+        output_logprobs = parse_logprobs(chat_completions)
+
         # Get the rewards for the completions
         # TODO: Integrate with async scoring function from verifiers
         logger.info(f"Computing rewards and advantages for step {step}")
         compute_rewards_start_time = time.time()
-        completions = parse_completions(chat_completions)
         task_types = [problem["task_type"] for problem in problems]
         verification_infos = [json.loads(problem["verification_info"]) for problem in problems]
         rewards = compute_rewards(completions, task_types, verification_infos)
@@ -189,12 +189,22 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         total_samples += config.batch_size
         throughput = num_tokens / (generate_completions_time + compute_rewards_time)
         avg_seq_length = num_tokens / config.batch_size
+        
+        # Log samples to W&B table if enabled
+        if monitor.wandb:
+            monitor.wandb.log_samples(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                rewards=rewards,
+                advantages=advantages,
+                step=step,
+            )
 
         # Write serialized batch to disk for trainer workers to consume
         all_data_ranks_batches = prepare_batch(
             input_tokens=input_tokens,
-            output_tokens=parse_output_tokens(chat_completions),
-            output_logprobs=parse_logprobs(chat_completions),
+            output_tokens=output_tokens,
+            output_logprobs=output_logprobs,
             advantages=advantages,
             temperature=config.sampling.temperature,
             tokenizer=tokenizer,

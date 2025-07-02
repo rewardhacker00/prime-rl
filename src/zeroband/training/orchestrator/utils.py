@@ -3,8 +3,9 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-from openai import ChatCompletion
+from openai.types.chat import ChatCompletion
 
+from zeroband.training.orchestrator.genesys import TaskType
 from zeroband.training.orchestrator.genesys import get_reward_function
 from zeroband.utils.logger import get_logger
 
@@ -15,8 +16,9 @@ def parse_logprobs(chat_completions: list[ChatCompletion]) -> list[list[float]]:
     for chat_completion in chat_completions:
         assert len(chat_completion.choices) == 1, "Response should always have one choice"
         assert chat_completion.choices[0].logprobs is not None, (
-            "Logprobs should not be None. Make sure to set logprobs=True when making the request to /v1/chat/completions"
+            "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
         )
+        assert chat_completion.choices[0].logprobs.content is not None, "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
         logprobs.append([logprob.logprob for logprob in chat_completion.choices[0].logprobs.content])
     return logprobs
 
@@ -27,8 +29,9 @@ def parse_output_tokens(chat_completions: list[ChatCompletion]) -> list[list[int
     for chat_completion in chat_completions:
         assert len(chat_completion.choices) == 1, "Response should always have one choice"
         assert chat_completion.choices[0].logprobs is not None, (
-            "Logprobs should not be None. Make sure to set return_tokens_as_token_ids=True in the extra body when making the request to /v1/chat/completions"
+            "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
         )
+        assert chat_completion.choices[0].logprobs.content is not None, "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
         tokens.append([int(token.token.split(":")[-1]) for token in chat_completion.choices[0].logprobs.content])
     return tokens
 
@@ -59,7 +62,7 @@ def wait_for_weight_checkpoint(path: Path, step: int, interval: int = 1, log_int
 
 def compute_rewards(
     completions: list[str],
-    task_types: list[str],
+    task_types: list[TaskType],
     verification_infos: list[dict[str, Any]],
 ) -> list[float]:
     rewards = []

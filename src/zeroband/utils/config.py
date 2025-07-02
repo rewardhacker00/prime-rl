@@ -87,6 +87,28 @@ class APIMonitorConfig(BaseConfig):
         return self
 
 
+class SampleLoggingConfig(BaseConfig):
+    """Configures sample logging for W&B tables."""
+    
+    interval: Annotated[
+        int,
+        Field(
+            default=10,
+            ge=1,
+            description="Step interval at which to log samples to W&B table.",
+        ),
+    ]
+    
+    num_samples: Annotated[
+        int,
+        Field(
+            default=8,
+            ge=1,
+            description="Number of samples to randomly select and log from each batch.",
+        ),
+    ]
+
+
 class WandbMonitorConfig(BaseConfig):
     """Configures logging to Weights and Biases."""
 
@@ -114,6 +136,14 @@ class WandbMonitorConfig(BaseConfig):
     ]
 
     offline: Annotated[bool, Field(default=False, description="Whether to run W&B in offline mode.")]
+    
+    log_samples: Annotated[
+        SampleLoggingConfig | None,
+        Field(
+            default=None,
+            description="Configuration for logging prompt/response samples to W&B tables. If None, no samples are logged.",
+        ),
+    ]
 
     @model_validator(mode="after")
     def validate_name(self):

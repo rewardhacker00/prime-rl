@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import random
 import socket
 import threading
 import time
@@ -9,9 +10,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 import aiohttp
+import pandas as pd
 import psutil
 import pynvml
 import wandb
+from transformers.tokenization_utils import PreTrainedTokenizer
 
 from zeroband.utils.config import (
     APIMonitorConfig,
@@ -90,8 +93,8 @@ class APIMonitor(Monitor):
 
     def __init__(self, config: APIMonitorConfig, task_id: str | None = None):
         super().__init__(config, task_id)
-        self.url = self.config.url
-        self.auth_token = self.config.auth_token
+        self.url = config.url
+        self.auth_token = config.auth_token
 
     def log(self, metrics: dict[str, Any]) -> None:
         """Logs metrics to the server"""
@@ -120,13 +123,15 @@ class WandbMonitor(Monitor):
     def __init__(
         self,
         config: WandbMonitorConfig,
+        tokenizer: PreTrainedTokenizer | None = None,
         task_id: str | None = None,
         run_config: BaseSettings | None = None,
     ):
         super().__init__(config, task_id)
         rank = int(os.environ.get("LOCAL_RANK", os.environ.get("DP_RANK", "0")))
-        self.enabled = rank == 0
-        if not self.enabled:
+        self.config = config
+        self.is_master = rank == 0
+        if not self.is_master:
             self.logger.warning(f"Skipping WandbMonitor initialization from non-master rank ({rank})")
             return
         self.wandb = wandb.init(
@@ -134,14 +139,73 @@ class WandbMonitor(Monitor):
             group=config.group,
             name=config.name,
             dir=config.dir,
-            config=run_config.model_dump(),
+            config=run_config.model_dump() if run_config else None,
             mode="offline" if config.offline else None,
         )
+        
+        # Optionally, initialize sample logging attributes
+        if config.log_samples:
+            assert tokenizer is not None, "Tokenizer is required for sample logging"
+            self.tokenizer = tokenizer
+            self.last_log_step = -1
+            self.samples = []
 
     def log(self, metrics: dict[str, Any]) -> None:
-        if not self.enabled:
+        if not self.is_master:
             return
         wandb.log(metrics, step=metrics.get("step", None))
+    
+    def log_samples(
+        self,
+        input_tokens: list[list[int]],
+        output_tokens: list[list[int]],
+        rewards: list[float],
+        advantages: list[float],
+        step: int,
+    ) -> None:
+        """Log prompt/response samples to W&B table.
+        
+        Args:
+            input_tokens: List of input token sequences
+            output_tokens: List of output token sequences  
+            rewards: List of rewards for each sample
+            task_rewards: Optional list of task-specific rewards
+            step: Current training step
+        """
+        if not self.config.log_samples or step % self.config.log_samples.interval != 0:
+            # Do not log samples if not enabled or not log interval step
+            return
+        assert self.tokenizer is not None, "Tokenizer is required for sample logging"
+        assert self.last_log_step < step, "Step must be greater than last logged step"
+            
+        self.logger.debug(f"Logging {self.config.log_samples.num_samples} samples to W&B table at step {step}")
+        start_time = time.time()
+        batch_size = len(input_tokens)
+        num_samples = min(self.config.log_samples.num_samples, batch_size)
+            
+        # Randomly select and log samples
+        indices = random.sample(range(batch_size), num_samples)
+        for idx in indices:
+            sample = {
+                "step": step,
+                "sample_idx": idx,
+                "num_input_tokens": len(input_tokens[idx]),
+                "num_output_tokens": len(output_tokens[idx]),
+                "input_tokens": input_tokens[idx],
+                "output_tokens": output_tokens[idx],
+                "prompt": self.tokenizer.decode(input_tokens[idx]),
+                "completion": self.tokenizer.decode(output_tokens[idx]),
+                "reward": float(rewards[idx]),
+                "advantage": float(advantages[idx]),
+            }
+            self.samples.append(sample)
+            
+        # Log to W&B table at configured intervals
+        df = pd.DataFrame(self.samples)
+        table = wandb.Table(dataframe=df)
+        wandb.log({"completions": table}, step=step)
+        self.last_log_step = step
+        self.logger.debug(f"Logged {len(indices)} samples to W&B table in {time.time() - start_time:.2f}s")
 
 
 MonitorType = Literal["file", "socket", "api", "wandb"]
@@ -156,11 +220,13 @@ class MultiMonitor:
         self,
         config: MultiMonitorConfig,
         task_id: str | None = None,
+        tokenizer: PreTrainedTokenizer | None = None,
         run_config: BaseSettings | None = None,
     ):
         self.logger = get_logger()
         # Initialize outputs
         self.outputs: dict[MonitorType, Monitor] = {}
+        self.wandb = None
         if config.file is not None:
             self.outputs["file"] = FileMonitor(config.file, task_id)
         if config.socket is not None:
@@ -168,7 +234,8 @@ class MultiMonitor:
         if config.api is not None:
             self.outputs["api"] = APIMonitor(config.api, task_id)
         if config.wandb is not None:
-            self.outputs["wandb"] = WandbMonitor(config.wandb, task_id, run_config=run_config)
+            self.wandb = WandbMonitor(config.wandb, tokenizer, task_id, run_config=run_config)
+            self.outputs["wandb"] = self.wandb
 
         self.disabled = len(self.outputs) == 0
 
@@ -200,7 +267,7 @@ class MultiMonitor:
                         "step": step,
                     }
                 output.log(metrics)
-
+    
     def _set_has_gpu(self) -> bool:
         """Determines if a GPU is available at runtime"""
         try:
@@ -273,11 +340,12 @@ def get_monitor() -> MultiMonitor:
 def setup_monitor(
     config: MultiMonitorConfig,
     task_id: str | None = None,
+    tokenizer: PreTrainedTokenizer | None = None,
     run_config: BaseSettings | None = None,
 ) -> MultiMonitor:
     """Sets up a monitor to log metrics to multiple specified outputs."""
     global _MONITOR
     if _MONITOR is not None:
         raise RuntimeError("Monitor already initialized. Please call `setup_monitor` only once.")
-    _MONITOR = MultiMonitor(config, task_id, run_config)
+    _MONITOR = MultiMonitor(config, task_id, tokenizer, run_config)
     return _MONITOR
