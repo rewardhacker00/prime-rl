@@ -89,7 +89,8 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         for benchmark in config.eval.benchmarks:
             await run_benchmark(client, benchmark, config.model, config.sampling, step=0, use_tqdm=True)
 
-    # Load dataset (TODO: Change to verifiers)
+    # Load dataset 
+    # TODO: Change to verifiers environment
     dataset: Dataset = load_dataset(config.data.name, split=config.data.split)
     dataset = dataset.shuffle(seed=config.seed)
 

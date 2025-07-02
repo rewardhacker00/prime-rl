@@ -110,8 +110,8 @@ class SamplingConfig(BaseConfig):
     ]
 
 
-# TODO(Mika, Will): Change data config to verifiers environment
 # TODO(Mika): Find an elegant way to enable online/ offline difficulty filtering
+# TODO: Change to verifiers environment config
 class DataConfig(BaseConfig):
     """Configures the data to be used for inference."""
 
