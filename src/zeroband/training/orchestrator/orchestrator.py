@@ -4,6 +4,7 @@ import shutil
 import time
 from multiprocessing.queues import Queue
 from pathlib import Path
+import lovely_tensors as lt
 
 import numpy as np
 import torch
@@ -166,13 +167,15 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Get the rewards for the completions
         # TODO: Integrate with async scoring function from verifiers
-        logger.info(f"Computing rewards for step {step}")
+        logger.info(f"Computing rewards and advantages for step {step}")
         compute_rewards_start_time = time.time()
         completions = parse_completions(chat_completions)
         task_types = [problem["task_type"] for problem in problems]
         verification_infos = [json.loads(problem["verification_info"]) for problem in problems]
         rewards = compute_rewards(completions, task_types, verification_infos)
         advantages = compute_advantages(rewards, config.sampling.n)
+        logger.debug(f"Computed rewards: {lt.lovely(torch.tensor(rewards))}")
+        logger.debug(f"Computed advantages: {lt.lovely(torch.tensor(advantages))}")
 
         compute_rewards_time = time.time() - compute_rewards_start_time
 
