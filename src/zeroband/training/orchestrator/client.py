@@ -56,6 +56,13 @@ async def reset_weights(client: AsyncOpenAI) -> None:
     logger.debug(f"Sending request to {url} to reset weights to base model")
     await client._client.post(url=url, json={})
 
+async def tokenize(client: AsyncOpenAI, model_config: ModelConfig, messages: list[dict[str, str]]) -> list[int]:
+    logger = get_logger()
+    url = str(client.base_url)[:-4] + "/tokenize"
+    logger.debug(f"Sending request to {url} to tokenize messages: {messages}")
+    res = await client._client.post(url=url, json={"model": model_config.name, "messages": messages})
+    return res.json()["tokens"]
+
 
 async def generate_completion(
     client: AsyncOpenAI,

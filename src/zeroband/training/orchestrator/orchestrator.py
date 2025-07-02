@@ -16,6 +16,7 @@ from zeroband.training.orchestrator.client import (
     check_has_model,
     check_health,
     generate_completion,
+    tokenize,
     reload_weights,
     reset_weights,
     setup_client,
@@ -160,6 +161,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         # TODO: Integrate with async (multi-turn) rollout function from verifiers
         logger.info(f"Sending {len(batch_messages)} inference requests for step {step}")
         generate_completions_start_time = time.time()
+        input_tokens = await asyncio.gather(*(tokenize(client, config.model, messages) for messages in batch_messages))
         chat_completions = await asyncio.gather(
             *(generate_completion(client, config.model, config.sampling, messages) for messages in batch_messages)
         )
@@ -190,7 +192,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Write serialized batch to disk for trainer workers to consume
         all_data_ranks_batches = prepare_batch(
-            prompts=prompts,
+            input_tokens=input_tokens,
             output_tokens=parse_output_tokens(chat_completions),
             output_logprobs=parse_logprobs(chat_completions),
             advantages=advantages,

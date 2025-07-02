@@ -16,4 +16,3 @@ name = "mikasenghaas/reverse_text_dataset_debug_50_seq_len"
 
 [orchestrator.sampling]
 n = 16
-max_tokens = 64

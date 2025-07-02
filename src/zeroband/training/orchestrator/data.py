@@ -19,7 +19,7 @@ class Sample(TypedDict):
 
 
 def prepare_sample(
-    prompt: str,
+    input_tokens: list[int],
     output_tokens: list[int],
     output_logprobs: list[float],
     advantage: float,
@@ -32,7 +32,7 @@ def prepare_sample(
     Tokenize and
     """
 
-    input_tokens = torch.tensor(tokenizer.encode(prompt))
+    input_tokens = torch.tensor(input_tokens)
     output_tokens = torch.tensor(output_tokens)
     inputs_ids = torch.cat([input_tokens, output_tokens], dim=0).int()
     total_tokens = inputs_ids.shape[0]
@@ -81,7 +81,7 @@ def prepare_micro_batch(samples: list[MicroBatch], temperature: float):
 
 
 def prepare_batch_padding(
-    prompts: list[str],
+    input_tokens: list[list[int]],
     output_tokens: list[list[int]],
     output_logprobs: list[list[float]],
     advantages: list[float],
@@ -96,10 +96,10 @@ def prepare_batch_padding(
     Prepare a batch of problems for each GPU. Each batch is a list of micro batches.
     Each micro batch is shape [micro_bs, max_seq_len] and contains micro_bs samples that are padded to the max lenght
     """
-    assert len(prompts) == len(output_tokens) == len(output_logprobs) == len(advantages), (
-        "Prompts, output_tokens, output_logprobs, and advantages must have the same length"
+    assert len(input_tokens) == len(output_tokens) == len(output_logprobs) == len(advantages), (
+        "input_tokens, output_tokens, output_logprobs, and advantages must have the same length"
     )
-    batch_size = len(prompts)
+    batch_size = len(input_tokens)
 
     assert batch_size % (micro_batch_size * num_train_workers) == 0, "Batch size must be divisible by micro batch size"
     per_gpu_micro_batches = batch_size // (num_train_workers * micro_batch_size)
@@ -111,7 +111,7 @@ def prepare_batch_padding(
             micro_batches = []
             for _ in range(micro_batch_size):
                 sample = prepare_sample(
-                    prompts.pop(),
+                    input_tokens.pop(),
                     output_tokens.pop(),
                     output_logprobs.pop(),
                     advantages.pop(),
@@ -176,7 +176,7 @@ def prepare_micro_batch_packing(samples: list[Sample], max_seq_len: int, tempera
 
 
 def prepare_batch_packing(
-    prompts: list[str],
+    input_tokens: list[list[int]],
     output_tokens: list[list[int]],
     output_logprobs: list[list[float]],
     advantages: list[float],
@@ -191,15 +191,15 @@ def prepare_batch_packing(
     Prepare a batch of problems for each GPU. Each batch is a list of micro batches.
     Each micro batch is shape [1, micro_bs * max_seq_len], the namber of sample is not fixed per micro batch.
     """
-    assert len(prompts) == len(output_tokens) == len(output_logprobs) == len(advantages), (
-        "Prompts, output_tokens, output_logprobs, and advantages must have the same length"
+    assert len(input_tokens) == len(output_tokens) == len(output_logprobs) == len(advantages), (
+        "input_tokens, output_tokens, output_logprobs, and advantages must have the same length"
     )
 
     max_seq_len = seq_len * micro_batch_size
 
     all_samples = [
-        prepare_sample(prompt, output_token, output_logprob, advantage, max_seq_len, tokenizer, pad=False)
-        for prompt, output_token, output_logprob, advantage in zip(prompts, output_tokens, output_logprobs, advantages)
+        prepare_sample(input_token, output_token, output_logprob, advantage, max_seq_len, tokenizer, pad=False)
+        for input_token, output_token, output_logprob, advantage in zip(input_tokens, output_tokens, output_logprobs, advantages)
     ]
 
     micro_batches_list = packed_samples_into_micro_bs(all_samples, max_seq_len)
@@ -232,7 +232,7 @@ def prepare_batch_packing(
 
 
 def prepare_batch(
-    prompts: list[str],
+    input_tokens: list[list[int]],
     output_tokens: list[list[int]],
     output_logprobs: list[list[float]],
     advantages: list[float],
@@ -250,7 +250,7 @@ def prepare_batch(
     match collate_mode:
         case "padding":
             return prepare_batch_padding(
-                prompts,
+                input_tokens,
                 output_tokens,
                 output_logprobs,
                 advantages,
@@ -263,7 +263,7 @@ def prepare_batch(
             )
         case "packing":
             return prepare_batch_packing(
-                prompts,
+                input_tokens,
                 output_tokens,
                 output_logprobs,
                 advantages,
