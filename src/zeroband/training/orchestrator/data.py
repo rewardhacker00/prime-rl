@@ -92,6 +92,11 @@ def prepare_batch_padding(
     seq_len: int,
     num_train_workers: int,
 ) -> list[list[MicroBatch]]:
+    input_tokens = copy.deepcopy(input_tokens)
+    output_tokens = copy.deepcopy(output_tokens)
+    output_logprobs = copy.deepcopy(output_logprobs)
+    advantages = copy.deepcopy(advantages)
+
     """
     Prepare a batch of problems for each GPU. Each batch is a list of micro batches.
     Each micro batch is shape [micro_bs, max_seq_len] and contains micro_bs samples that are padded to the max lenght
@@ -187,6 +192,11 @@ def prepare_batch_packing(
     seq_len: int,
     num_train_workers: int,
 ) -> list[list[MicroBatch]]:
+    input_tokens = copy.deepcopy(input_tokens)
+    output_tokens = copy.deepcopy(output_tokens)
+    output_logprobs = copy.deepcopy(output_logprobs)
+    advantages = copy.deepcopy(advantages)
+
     """
     Prepare a batch of problems for each GPU. Each batch is a list of micro batches.
     Each micro batch is shape [1, micro_bs * max_seq_len], the namber of sample is not fixed per micro batch.
@@ -199,7 +209,9 @@ def prepare_batch_packing(
 
     all_samples = [
         prepare_sample(input_token, output_token, output_logprob, advantage, max_seq_len, tokenizer, pad=False)
-        for input_token, output_token, output_logprob, advantage in zip(input_tokens, output_tokens, output_logprobs, advantages)
+        for input_token, output_token, output_logprob, advantage in zip(
+            input_tokens, output_tokens, output_logprobs, advantages
+        )
     ]
 
     micro_batches_list = packed_samples_into_micro_bs(all_samples, max_seq_len)
