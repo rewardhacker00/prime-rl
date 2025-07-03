@@ -197,9 +197,7 @@ def train(config: TrainingConfig):
             input_ids = micro_batch["input_ids"].to("cuda")
             position_ids = micro_batch["position_ids"].to("cuda")
             advantages = micro_batch["advantages"].to("cuda")
-            loss_mask = (
-                torch.ones_like(input_ids).int().to("cuda")
-            )  # TODO(Mika): Remove this from loss computation, then here
+            loss_mask = micro_batch["loss_mask"].to("cuda")
             logprobs = micro_batch["logprobs"].to("cuda")
             temperature = micro_batch["temperature"]
             total_tokens = micro_batch["total_tokens"]
