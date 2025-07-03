@@ -59,7 +59,7 @@ class ProcessResult:
         self.pid = pid
 
 
-def run_subprocess(command: Command, env: Environment, timeout: int = TIMEOUT) -> ProcessResult | None:
+def run_subprocess(command: Command, env: Environment, timeout: int = TIMEOUT) -> ProcessResult:
     """Run a subprocess with given command and environment with a timeout"""
     try:
         process = subprocess.Popen(command, env={**os.environ, **env})
@@ -72,8 +72,7 @@ def run_subprocess(command: Command, env: Environment, timeout: int = TIMEOUT) -
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-    except Exception as e:
-        raise e
+        return ProcessResult(1, process.pid)
 
 
 def run_subprocesses_in_parallel(
@@ -95,13 +94,13 @@ def run_subprocesses_in_parallel(
 
 
 @pytest.fixture(scope="module")
-def run_process() -> Callable[[Command, Environment], ProcessResult]:
+def run_process() -> Callable[[Command, Environment, int], ProcessResult]:
     """Factory fixture for running a single process."""
     return run_subprocess
 
 
 @pytest.fixture(scope="module")
-def run_processes() -> Callable[[list[Command], list[Environment]], list[ProcessResult]]:
+def run_processes() -> Callable[[list[Command], list[Environment], int], list[ProcessResult]]:
     """Factory fixture for running multiple processes in parallel."""
     return run_subprocesses_in_parallel
 
@@ -120,7 +119,7 @@ def vllm_server() -> Generator[None, None, None]:
 
     # Start the server as a subprocess
     env = {**os.environ, **VLLM_SERVER_ENV}
-    process = subprocess.Popen(VLLM_SERVER_CMD, env=env)
+    process = subprocess.Popen(VLLM_SERVER_CMD, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     # Default vLLM server URL
     base_url = "http://localhost:8000"
