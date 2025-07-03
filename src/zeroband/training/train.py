@@ -59,6 +59,7 @@ def train(config: TrainingConfig):
     orchestrator = None
     if config.orchestrator and world.rank == 0:
         config.orchestrator.num_train_workers = world.world_size
+
         logger.info("Starting orchestrator in a separate process")
 
         # Create a queue for orchestrator to signal when setup is complete

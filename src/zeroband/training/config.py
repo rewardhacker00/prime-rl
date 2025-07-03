@@ -231,4 +231,13 @@ class TrainingConfig(BaseSettings):
         if self.orchestrator and self.monitor.wandb and self.monitor.wandb.group:
             self.monitor.wandb.name = f"{self.monitor.wandb.group}-train"
             self.orchestrator.monitor.wandb.name = f"{self.monitor.wandb.group}-orchestrator"
+
+            self.orchestrator.monitor.wandb.project = self.monitor.wandb.project
+            self.orchestrator.monitor.wandb.group = self.monitor.wandb.group
+        return self
+
+    @model_validator(mode="after")
+    def check_model_name_orchestrator(self):
+        if self.orchestrator:
+            self.orchestrator.model.name = self.model.name
         return self
