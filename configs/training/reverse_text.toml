@@ -27,3 +27,6 @@ max_seq_len = 128
 [orchestrator.monitor.wandb.log_samples]
 interval = 10
 num_samples = 8
+
+[infer.parallel]
+dp = 1
