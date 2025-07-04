@@ -18,7 +18,9 @@ def parse_logprobs(chat_completions: list[ChatCompletion]) -> list[list[float]]:
         assert chat_completion.choices[0].logprobs is not None, (
             "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
         )
-        assert chat_completion.choices[0].logprobs.content is not None, "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+        assert chat_completion.choices[0].logprobs.content is not None, (
+            "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+        )
         logprobs.append([logprob.logprob for logprob in chat_completion.choices[0].logprobs.content])
     return logprobs
 
@@ -31,7 +33,9 @@ def parse_output_tokens(chat_completions: list[ChatCompletion]) -> list[list[int
         assert chat_completion.choices[0].logprobs is not None, (
             "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
         )
-        assert chat_completion.choices[0].logprobs.content is not None, "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+        assert chat_completion.choices[0].logprobs.content is not None, (
+            "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+        )
         tokens.append([int(token.token.split(":")[-1]) for token in chat_completion.choices[0].logprobs.content])
     return tokens
 
@@ -49,7 +53,7 @@ def wait_for_weight_checkpoint(path: Path, step: int, interval: int = 1, log_int
     logger = get_logger()
     wait_time = 0
     model_path = Path(path) / f"step_{step}" / "model.pt"
-    logger.info(f"Waiting for checkpoint for step {step} at {model_path}")
+    logger.debug(f"Waiting for checkpoint for step {step} at {model_path}")
     while True:
         if model_path.exists():
             logger.debug(f"Found checkpoint for step {step} at {model_path}")

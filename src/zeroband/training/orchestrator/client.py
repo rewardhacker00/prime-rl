@@ -23,7 +23,8 @@ async def check_health(client: AsyncOpenAI, interval: int = 1, log_interval: int
             logger.debug(f"Inference pool is ready after {wait_time} seconds")
             return
         except Exception as e:
-            logger.warning(f"Inference pool was not reached after {wait_time} seconds (Error: {e})")
+            if wait_time % log_interval == 0:
+                logger.warning(f"Inference pool was not reached after {wait_time} seconds (Error: {e})")
             await asyncio.sleep(interval)
             wait_time += interval
     msg = f"Inference pool is not ready after {wait_time} (>{timeout}) seconds. Aborting..."

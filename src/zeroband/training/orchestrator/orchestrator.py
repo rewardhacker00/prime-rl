@@ -36,6 +36,7 @@ from zeroband.utils.monitor import setup_monitor
 from zeroband.utils.pydantic_config import parse_argv
 from zeroband.utils.utils import clean_exit
 
+
 @clean_exit
 async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = None):
     # Initialize the logger
@@ -69,7 +70,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
     monitor = setup_monitor(config.monitor, None, tokenizer, config)
 
     # Check health of the client
-    logger.info("Waiting for inference pool to be ready")
+    logger.debug("Waiting for inference pool to be ready")
     await check_health(client)
     await check_has_model(client, config.model.name)
     logger.success("Inference pool ready")
@@ -89,7 +90,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         for benchmark in config.eval.benchmarks:
             await run_benchmark(client, benchmark, config.model, config.sampling, step=0, use_tqdm=True)
 
-    # Load dataset 
+    # Load dataset
     # TODO: Change to verifiers environment
     dataset: Dataset = load_dataset(config.data.name, split=config.data.split)
     dataset = dataset.shuffle(seed=config.seed)
@@ -112,7 +113,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
             # Reshuffle dataset at the beginning of each epoch
             dataset = dataset.shuffle(seed=(config.seed or 0) + epoch - 1)
 
-        logger.info(
+        logger.debug(
             f"Orchestrator step {step} (epoch: {epoch}, epoch_step: {epoch_step + 1}/{steps_per_epoch}, checkpoint step: {ckpt_step})"
         )
         step_start_time = time.time()
@@ -129,7 +130,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         async_level = step - 1 - ckpt_step  # How many steps training ahead
         if async_level > config.async_level:
             ckpt_step = step - 1 - config.async_level
-            logger.warning(
+            logger.debug(
                 f"Hit async barrier because step {step} is {async_level} (>{config.async_level}) steps ahead of checkpoint step {ckpt_step}."
             )
             wait_for_weight_checkpoint(config.weights.path, ckpt_step)
@@ -156,11 +157,14 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Get the completions for the batch
         # TODO: Integrate with async (multi-turn) rollout function from verifiers
-        logger.info(f"Sending {len(batch_messages)} inference requests for step {step}")
+        logger.debug(f"Sending {len(batch_messages)} inference requests for step {step}")
         generate_completions_start_time = time.time()
         input_tokens = await asyncio.gather(*(tokenize(client, config.model, messages) for messages in batch_messages))
         chat_completions = await asyncio.gather(
-            *(generate_completion(client, config.model, config.sampling, messages, len(input_tokens)) for messages, input_tokens in zip(batch_messages, input_tokens))
+            *(
+                generate_completion(client, config.model, config.sampling, messages, len(input_tokens))
+                for messages, input_tokens in zip(batch_messages, input_tokens)
+            )
         )
         generate_completions_time = time.time() - generate_completions_start_time
 
@@ -171,7 +175,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Get the rewards for the completions
         # TODO: Integrate with async scoring function from verifiers
-        logger.info(f"Computing rewards and advantages for step {step}")
+        logger.debug(f"Computing rewards and advantages for step {step}")
         compute_rewards_start_time = time.time()
         task_types = [problem["task_type"] for problem in problems]
         verification_infos = [json.loads(problem["verification_info"]) for problem in problems]
@@ -190,7 +194,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         total_samples += config.batch_size
         throughput = num_tokens / (generate_completions_time + compute_rewards_time)
         avg_seq_length = num_tokens / config.batch_size
-        
+
         # Log samples to W&B table if enabled
         if monitor.wandb:
             monitor.wandb.log_samples(
@@ -227,8 +231,8 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        step_message = f"Finished orchestrator step {step} in {step_time:.2f}s (Avg. Reward: {np.mean(rewards):.2f}, Avg. Advantage: {np.mean(advantages):.2f}, Throughput: {throughput:.1f} tokens/s, Avg. Seq. Length: {avg_seq_length:.1f} tokens/sample)"
-        logger.success(step_message)
+        step_message = f"Orchestrator | step {step} | Time:{step_time:.2f}s | Avg. Reward: {np.mean(rewards):.2f} | Avg. Advantage: {np.mean(advantages):.2f} | Throughput: {throughput:.1f} tokens/s | Avg. Seq. Length: {avg_seq_length:.1f} tokens/sample"
+        logger.info(step_message)
 
         # Log progress metrics to monitor
         progress_metrics = {

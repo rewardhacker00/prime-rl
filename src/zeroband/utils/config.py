@@ -22,7 +22,7 @@ class LogConfig(BaseConfig):
     """Configures the logger."""
 
     level: Annotated[
-        Literal["debug", "info"],
+        Literal["debug", "info", "sucess"],
         Field(description="Logging level for the process. Will determine the logging verbosity and format."),
     ] = "info"
 
@@ -89,7 +89,7 @@ class APIMonitorConfig(BaseConfig):
 
 class SampleLoggingConfig(BaseConfig):
     """Configures sample logging for W&B tables."""
-    
+
     interval: Annotated[
         int,
         Field(
@@ -98,7 +98,7 @@ class SampleLoggingConfig(BaseConfig):
             description="Step interval at which to log samples to W&B table.",
         ),
     ]
-    
+
     num_samples: Annotated[
         int,
         Field(
@@ -136,7 +136,7 @@ class WandbMonitorConfig(BaseConfig):
     ]
 
     offline: Annotated[bool, Field(default=False, description="Whether to run W&B in offline mode.")]
-    
+
     log_samples: Annotated[
         SampleLoggingConfig | None,
         Field(

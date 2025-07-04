@@ -139,7 +139,7 @@ def train(config: TrainingConfig):
     logger.info(f"Starting training loop ({config.max_steps=})")
     active_weight_checkpoint_paths: list[Path] = []
     while True:
-        logger.info(f"Training step {progress.step}")
+        logger.debug(f"Training step {progress.step}")
         step_start_time = time.time()
 
         # Check if orchestrator is still alive (only on rank 0)
@@ -174,7 +174,6 @@ def train(config: TrainingConfig):
             with torch.no_grad():
                 num_micro_batches = len(micro_batches)
                 for micro_step, micro_batch in enumerate(micro_batches, start=1):
-                    logger.debug(f"Computing logprobs for micro batch {micro_step} / {num_micro_batches}")
                     input_ids = micro_batch["input_ids"].to("cuda")
                     position_ids = micro_batch["position_ids"].to("cuda")
                     temperature = micro_batch["temperature"]
@@ -204,7 +203,6 @@ def train(config: TrainingConfig):
             temperature = micro_batch["temperature"]
             total_tokens = micro_batch["total_tokens"]
             micro_batch_size, seq_len = input_ids.shape
-            logger.debug(f"Training on micro batch {micro_step}/{num_micro_batches} ({micro_batch_size=}, {seq_len=})")
 
             # Optionally, normalize the loss to the token count
             max_tokens = micro_batch_size * seq_len
@@ -212,7 +210,6 @@ def train(config: TrainingConfig):
                 max_tokens = int(total_tokens)
 
             # Forward pass
-            logger.debug(f"Forward pass on micro batch {micro_step} / {num_micro_batches}")
             logits: Float[torch.Tensor, "batch seq vocab"] = model(
                 input_ids=input_ids, position_ids=position_ids
             ).logits.contiguous()
@@ -231,7 +228,6 @@ def train(config: TrainingConfig):
 
             # Compute the entropy
             with torch.no_grad():
-                logger.debug(f"Computing entropy on micro batch {micro_step} / {num_micro_batches}")
                 entropy = entropy_loss(logits, loss_mask, temperature, max_tokens)
 
             # Now we can delete the micro batch CUDA tensors
@@ -248,19 +244,13 @@ def train(config: TrainingConfig):
             loss_metrics["loss/entropy"] += entropy.detach().clone() / num_micro_batches
             loss_metrics["loss/clip_ratio"] += clip_ratio.detach().clone() / num_micro_batches
 
-            logger.debug(
-                f"Finished training on micro batch {micro_step} / {num_micro_batches} (loss: {loss.item():.2f}, entropy: {entropy.item():.2f}, clip_ratio: {clip_ratio.item():.2f})"
-            )
-
             del loss, entropy, clip_ratio
 
         # Synchronize the batch metrics across all ranks
-        logger.debug("Synchronizing batch metrics across all ranks")
         for key, value in loss_metrics.items():
             dist.all_reduce(value.to("cuda"), op=dist.ReduceOp.AVG)
             loss_metrics[key] = value
         # Optionally, clip the gradients
-        logger.debug(f"Clipping gradients with max norm {config.loss.max_norm}")
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), config.loss.max_norm).full_tensor()
         loss_metrics["loss/grad_norm"] += grad_norm.detach().clone()
 
@@ -328,7 +318,8 @@ def train(config: TrainingConfig):
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        step_message = f"Finished training step {progress.step} in {step_time:.2f}s (Loss: {loss_metrics['loss/loss']:.2f}, Entropy: {loss_metrics['loss/entropy']:.2f}, Clip Ratio: {loss_metrics['loss/clip_ratio']:.2f}, Throughput: {throughput:.2f} tokens/s, MFU: {mfu:.2f}%)"
+        step_message = f"Training     | step {progress.step} | Time:{step_time:.2f}s | Loss: {loss_metrics['loss/loss']:.2f} | Entropy: {loss_metrics['loss/entropy']:.2f} | Clip: {loss_metrics['loss/clip_ratio']:.2f} | {throughput:.0f} tokens/s | MFU: {mfu:.1f}%"
+
         logger.success(step_message)
 
         # Log progress metrics
