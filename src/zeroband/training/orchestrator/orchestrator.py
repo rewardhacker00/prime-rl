@@ -128,13 +128,26 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Optionally, wait for the next checkpoint to be available
         async_level = step - 1 - ckpt_step  # How many steps training ahead
+        wait_for_weight_ckpt_time, reload_weights_time = 0, 0
         if async_level > config.async_level:
             ckpt_step = step - 1 - config.async_level
             logger.debug(
                 f"Hit async barrier because step {step} is {async_level} (>{config.async_level}) steps ahead of checkpoint step {ckpt_step}."
             )
+
+            # Wait for the checkpoint to be available
+            logger.debug(f"Waiting for weight checkpoint for step {ckpt_step}")
+            wait_for_weight_ckpt_start_time = time.time()
             wait_for_weight_checkpoint(config.weights.path, ckpt_step)
+            wait_for_weight_ckpt_time = time.time() - wait_for_weight_ckpt_start_time
+            logger.debug(f"Waited {wait_for_weight_ckpt_time:.2f}s for weight checkpoint")
+
+            # Reload the weights
+            logger.debug(f"Reloading weights for step {ckpt_step}")
+            reload_weights_start_time = time.time()
             await reload_weights(client, config.weights.path, ckpt_step)
+            reload_weights_time = time.time() - reload_weights_start_time
+            logger.debug(f"Reloaded weights in {reload_weights_time:.2f}s")
 
         # Optionally, run online evals at the specified interval
         if (
@@ -264,8 +277,10 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         # Log time metrics to monitor
         time_metrics = {
             "time/infer": step_time,
+            "time/infer/wait_for_weight_ckpt": wait_for_weight_ckpt_time,
             "time/infer/generate_completions": generate_completions_time,
             "time/infer/compute_rewards": compute_rewards_time,
+            "time/infer/reload_weights": reload_weights_time,
             "step": step,
         }
         monitor.log(time_metrics)

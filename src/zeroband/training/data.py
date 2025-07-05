@@ -1,4 +1,3 @@
-import time
 from pathlib import Path
 from typing import TypedDict
 
@@ -7,6 +6,7 @@ from jaxtyping import Float, Int
 
 from zeroband.training.config import FakeDataLoaderConfig
 from zeroband.training.world import get_world
+from zeroband.utils.utils import wait_for_path
 
 
 class MicroBatch(TypedDict):
@@ -28,6 +28,9 @@ class FakeDataLoader:
         self.micro_batch_size = config.micro_batch_size
         self.num_micro_batches = self.batch_size // self.micro_batch_size
         self.seq_len = config.seq_len
+
+    def wait_for_batch(self) -> None:
+        return
 
     def get_batch(self) -> list[MicroBatch]:
         return [self._get_micro_batch() for _ in range(self.num_micro_batches)]
@@ -52,12 +55,13 @@ class DataLoader:
         self.current_step = start_step
         self.world = get_world()
 
+    def get_batch_path(self) -> Path:
+        return self.data_path / f"step_{self.current_step}" / f"rank_{self.world.rank}.pt"
+
+    def wait_for_batch(self) -> None:
+        wait_for_path(self.get_batch_path())
+
     def get_batch(self) -> list[MicroBatch]:
-        while True:
-            step_path = self.data_path / f"step_{self.current_step}" / f"rank_{self.world.rank}.pt"
-            if step_path.exists():
-                batches = torch.load(step_path)
-                self.current_step += 1
-                return batches
-            # Prevent busy waiting
-            time.sleep(0.01)
+        batches = torch.load(self.get_batch_path())
+        self.current_step += 1
+        return batches
