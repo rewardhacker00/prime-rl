@@ -268,7 +268,7 @@ def train(config: TrainingConfig):
         # Optionally, broadcast the weight checkpoint from master rank
         if world.rank == 0 and envs.SHARDCAST_OUTPUT_DIR is not None:
             logger.info(f"Broadcasting weights from {model_path} via shardcast")
-            shardcast.broadcast(model_path)  # TODO: Is this blocking?
+            shardcast.broadcast(model_path.as_posix())  # TODO: Is this blocking?
 
         # Optionally, remove old weight checkpoints to save space
         # +1 to ensure to not delete current checkpoint when async_level=0
@@ -284,9 +284,9 @@ def train(config: TrainingConfig):
         if config.profile_path and progress.step == 2 and world.rank == 0:
             logger.debug("Dumping memory snapshot")
             profile_path = config.profile_path
-            if not profile_path.endswith(".pickle"):
-                profile_path += ".pickle"
-            torch.cuda.memory._dump_snapshot(profile_path)
+            if not profile_path.suffix == ".pickle":
+                profile_path = profile_path.with_suffix(".pickle")
+            torch.cuda.memory._dump_snapshot(profile_path.as_posix())
             torch.cuda.memory._record_memory_history(enabled=False)
 
         # Optionally, save the full checkpoint

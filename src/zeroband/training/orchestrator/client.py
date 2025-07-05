@@ -2,7 +2,7 @@ import asyncio
 from pathlib import Path
 
 from openai import AsyncOpenAI
-from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.chat import ChatCompletion
 
 from zeroband.training.orchestrator.config import ClientConfig, ModelConfig, SamplingConfig
 from zeroband.utils.logger import get_logger

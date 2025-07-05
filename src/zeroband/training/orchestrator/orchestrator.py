@@ -4,8 +4,8 @@ import shutil
 import time
 from multiprocessing.queues import Queue
 from pathlib import Path
-import lovely_tensors as lt
 
+import lovely_tensors as lt
 import numpy as np
 import torch
 from datasets import Dataset, load_dataset
@@ -16,10 +16,10 @@ from zeroband.training.orchestrator.client import (
     check_has_model,
     check_health,
     generate_completion,
-    tokenize,
     reload_weights,
     reset_weights,
     setup_client,
+    tokenize,
 )
 from zeroband.training.orchestrator.config import OrchestratorConfig
 from zeroband.training.orchestrator.data import prepare_batch
@@ -152,7 +152,6 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
                     config.model,
                     config.sampling,
                     ckpt_step,
-                    use_tqdm=config.use_tqdm,
                 )
 
         # Get the completions for the batch

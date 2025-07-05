@@ -17,7 +17,8 @@ def setup_logger(log_config: LogConfig) -> Logger:
     format = time + message + debug
 
     # Setup the logger handlers
-    log_config.path = Path(log_config.path.as_posix() + ".log")
+    if log_config.path:
+        log_config.path = Path(log_config.path.as_posix() + ".log")
     logger = setup_handlers(loguru_logger, format, log_config, rank=0)
     set_logger(logger)
 

@@ -70,6 +70,7 @@ def setup_model(config: ModelConfig) -> Model:
     setup_ac(model, config)
     if config.compile:
         model = torch.compile(model)
+    # TODO: This should be type-hinted as FSDP version of the model
     return model
 
 
