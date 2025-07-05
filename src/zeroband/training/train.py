@@ -233,16 +233,18 @@ def train(config: TrainingConfig):
             # Now we can delete the micro batch CUDA tensors
             del micro_batch, logits, input_ids, position_ids, advantages, loss_mask, logprobs
 
-            # Scale the loss by the number of micro batches (=gradient accumulation steps)
+            # Scale loss, entropy, and clip ratio by the number of micro batches (=gradient accumulation steps)
             loss = loss / num_micro_batches
+            entropy = entropy / num_micro_batches
+            clip_ratio = clip_ratio / num_micro_batches
 
             # Backward pass (ensures loss reduction across FSDP ranks)
             logger.debug(f"Backward pass on micro batch {micro_step} / {num_micro_batches}")
             loss.backward()
 
-            loss_metrics["loss/loss"] += loss.detach().clone() / num_micro_batches
-            loss_metrics["loss/entropy"] += entropy.detach().clone() / num_micro_batches
-            loss_metrics["loss/clip_ratio"] += clip_ratio.detach().clone() / num_micro_batches
+            loss_metrics["loss/loss"] += loss.detach().clone()
+            loss_metrics["loss/entropy"] += entropy.detach().clone()
+            loss_metrics["loss/clip_ratio"] += clip_ratio.detach().clone()
 
             del loss, entropy, clip_ratio
 
