@@ -37,7 +37,7 @@ class ModelConfig(BaseConfig):
     ] = False
 
     reshard_after_forward: Annotated[
-        bool, Field(alias="reshard", description="Whether to reshard the model after each forward pass.")
+        bool, Field(description="Whether to reshard the model after each forward pass.")
     ] = True
 
 
