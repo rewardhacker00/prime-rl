@@ -364,10 +364,9 @@ def train(config: TrainingConfig):
         }
         monitor.log(time_metrics)
 
+        progress.step += 1
         if config.max_steps and progress.step >= config.max_steps:
             break
-
-        progress.step += 1
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
     logger.success("Training finished!")
