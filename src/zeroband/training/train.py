@@ -142,6 +142,8 @@ def train(config: TrainingConfig):
     logger.info(f"Starting training loop ({config.max_steps=})")
     active_weight_checkpoint_paths: list[Path] = []
     while True:
+        if config.max_steps and progress.step >= config.max_steps:
+            break
         logger.debug(f"Training step {progress.step}")
         step_start_time = time.time()
 
@@ -365,8 +367,6 @@ def train(config: TrainingConfig):
         monitor.log(time_metrics)
 
         progress.step += 1
-        if config.max_steps and progress.step >= config.max_steps:
-            break
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
     logger.success("Training finished!")
