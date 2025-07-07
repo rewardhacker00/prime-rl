@@ -270,10 +270,10 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Log rewards metrics to monitor
         reward_metrics = {
-            "reward/mean": np.mean(rewards),
-            "reward/std": np.std(rewards),
-            "reward/advantage/mean": np.mean(advantages),
-            "reward/advantage/std": np.std(advantages),
+            "reward/reward": np.mean(rewards),
+            "reward/reward_std": np.std(rewards),
+            "reward/advantage": np.mean(advantages),
+            "reward/advantage_std": np.std(advantages),
             "step": step,
         }
         monitor.log(reward_metrics)
