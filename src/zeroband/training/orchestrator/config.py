@@ -100,8 +100,35 @@ class SamplingConfig(BaseConfig):
     ] = None
 
 
-# TODO(Mika): Find an elegant way to enable online/ offline difficulty filtering
-# TODO: Change to verifiers environment config
+class DifficultyFilteringConfig(BaseConfig):
+    """Configures difficulty filtering for the dataset."""
+
+    min_solve_rate: Annotated[
+        float,
+        Field(
+            ge=0,
+            le=1,
+            description="Minimum solve rate for samples to be included.",
+        ),
+    ] = 0.0
+
+    max_solve_rate: Annotated[
+        float,
+        Field(
+            ge=0,
+            le=1,
+            description="Maximum solve rate for samples to be included.",
+        ),
+    ] = 1.0
+
+    solve_rate_field: Annotated[
+        str,
+        Field(
+            description="Field name in the dataset that contains the solve rate.",
+        ),
+    ] = "solve_rate"
+
+
 class DataConfig(BaseConfig):
     """Configures the data to be used for inference."""
 
@@ -113,6 +140,13 @@ class DataConfig(BaseConfig):
     ] = "PrimeIntellect/INTELLECT-2-RL-Dataset"
 
     split: Annotated[str, Field(description="Split of the dataset to use.")] = "train"
+
+    difficulty_filtering: Annotated[
+        DifficultyFilteringConfig | None,
+        Field(
+            description="Optional difficulty filtering configuration. If None, no filtering is applied.",
+        ),
+    ] = None
 
 
 class PathConfig(BaseConfig):

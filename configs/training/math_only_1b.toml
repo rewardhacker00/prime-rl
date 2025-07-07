@@ -18,6 +18,11 @@ seq_len = 8192
 [orchestrator.data]
 name = "PrimeIntellect/INTELLECT-2-only-math"
 
+[orchestrator.data.difficulty_filtering]
+solve_rate_field = "solve_rate_qwen_r1_distill_7b"
+min_solve_rate = 0.4
+max_solve_rate = 0.9
+
 [orchestrator.sampling]
 n = 16
 
