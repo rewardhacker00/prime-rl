@@ -59,7 +59,7 @@ def train(config: TrainingConfig):
 
     # Optionally, sidecar the orchestrator
     orchestrator = None
-    if config.orchestrator and world.rank == 0:
+    if config.orchestrator and world.rank == 0 and config.data.fake is None:
         config.orchestrator.num_train_workers = world.world_size
 
         logger.info("Starting orchestrator in a separate process")
