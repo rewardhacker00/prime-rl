@@ -101,6 +101,7 @@ def train(config: TrainingConfig):
             logger.info(f"Initializing shardcast from {envs.SHARDCAST_OUTPUT_DIR}")
             shardcast.initialize(
                 envs.SHARDCAST_OUTPUT_DIR,
+                # +1 to ensure to not delete current checkpoint when async_level=0
                 max_distribution_folders=config.async_level + 1,
             )
 
@@ -171,7 +172,7 @@ def train(config: TrainingConfig):
         if config.recompute_logprobs:
             logger.debug("Recomputing logprobs")
             compute_logprobs_start_time = time.time()
-            og_infer_step = progress.step - 1 - config.async_level  # -1 because we haven't updated the model yet
+            og_infer_step = progress.step - config.async_level
             infer_step = max(og_infer_step, 0)
 
             # Wake up the logprob model from CPU
@@ -268,7 +269,7 @@ def train(config: TrainingConfig):
         optimizer.zero_grad()
 
         # Save the weight checkpoint
-        step_path = Path(config.weights.path) / f"step_{progress.step}"
+        step_path = Path(config.weights.path) / f"step_{progress.step + 1}"
         save_weights_start_time = time.time()
         model_path = save_weight_checkpoint(model, tokenizer, step_path, async_save=config.weights.save_async)
         active_weight_checkpoint_paths.append(step_path)
@@ -310,7 +311,7 @@ def train(config: TrainingConfig):
         if config.recompute_logprobs:
             logger.debug("Offloading updated model to CPU")
             reshard_module(logprob_model)
-            tensor_offloaded_repository[progress.step] = copy_model_to_cpu(model)
+            tensor_offloaded_repository[progress.step + 1] = copy_model_to_cpu(model)
 
         # Compute step metrics
         num_local_tokens = micro_batch_size * seq_len * num_micro_batches

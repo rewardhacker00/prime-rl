@@ -106,19 +106,19 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
     total_tokens, total_samples = 0, 0
     ckpt_step = 0
     last_eval_step = -1
-    epoch = 0
+    epoch = -1
 
-    for step in range(1, int(max_steps) + 1):
+    for step in range(int(max_steps)):
         # Check if we need to start a new epoch
-        epoch_step = (step - 1) % steps_per_epoch
+        epoch_step = step % steps_per_epoch
         if epoch_step == 0:
             epoch += 1
             logger.info(f"Starting epoch {epoch}")
             # Reshuffle dataset at the beginning of each epoch
-            dataset = dataset.shuffle(seed=(config.seed or 0) + epoch - 1)
+            dataset = dataset.shuffle(seed=(config.seed or 0) + epoch)
 
         logger.debug(
-            f"Orchestrator step {step} (epoch: {epoch}, epoch_step: {epoch_step + 1}/{steps_per_epoch}, checkpoint step: {ckpt_step})"
+            f"Orchestrator step {step} (epoch: {epoch}, epoch_step: {epoch_step}/{steps_per_epoch}, checkpoint step: {ckpt_step})"
         )
         step_start_time = time.time()
 
@@ -131,15 +131,14 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         batch_messages = [[{"role": "user", "content": prompt}] for prompt in prompts]
 
         # Optionally, wait for the next checkpoint to be available
-        async_level = step - 1 - ckpt_step  # How many steps training ahead
         wait_for_weight_ckpt_time, reload_weights_time = 0, 0
-        if async_level > config.async_level:
-            ckpt_step = step - 1 - config.async_level
+        if step - ckpt_step > config.async_level:
             logger.debug(
-                f"Hit async barrier because step {step} is {async_level} (>{config.async_level}) steps ahead of checkpoint step {ckpt_step}."
+                f"Hit async barrier because step {step} is {step - ckpt_step} (>{config.async_level}) steps ahead of checkpoint step {ckpt_step}."
             )
 
             # Wait for the checkpoint to be available
+            ckpt_step = step - config.async_level
             logger.debug(f"Waiting for weight checkpoint for step {ckpt_step}")
             wait_for_weight_ckpt_start_time = time.time()
             wait_for_weight_checkpoint(config.weights.path, ckpt_step)

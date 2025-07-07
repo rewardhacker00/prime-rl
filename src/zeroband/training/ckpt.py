@@ -16,7 +16,7 @@ from zeroband.utils.logger import get_logger
 
 @dataclass
 class TrainingProgress:
-    step: int = 1
+    step: int = 0
     total_tokens: int = 0
     total_samples: int = 0
 
