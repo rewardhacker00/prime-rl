@@ -213,7 +213,7 @@ class TrainingConfig(BaseSettings):
     ] = True
 
     @model_validator(mode="after")
-    def auto_name_wandb(self):
+    def auto_setup_orchestrator_wandb(self):
         # Automatically use same W&B project
         if self.orchestrator and self.monitor.wandb:
             if not self.orchestrator.monitor.wandb:
@@ -229,7 +229,13 @@ class TrainingConfig(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def check_model_name_orchestrator(self):
+    def auto_setup_orchestrator_model(self):
         if self.orchestrator:
             self.orchestrator.model.name = self.model.name
+        return self
+
+    @model_validator(mode="after")
+    def auto_setup_orchestrator_log_level(self):
+        if self.orchestrator:
+            self.orchestrator.log.level = self.log.level
         return self
