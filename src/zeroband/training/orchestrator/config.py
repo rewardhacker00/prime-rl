@@ -149,19 +149,6 @@ class DataConfig(BaseConfig):
     ] = None
 
 
-class PathConfig(BaseConfig):
-    """Configures a path used for input/ output operations"""
-
-    path: Annotated[Path, Field(description="Path to write to.")]
-
-    clean: Annotated[
-        bool,
-        Field(
-            description="Whether to clean the path at the beginning of the run. If True, will delete the entire directory.",
-        ),
-    ] = False
-
-
 class OnlineEvalConfig(BaseConfig):
     """Configures online evaluation."""
 
@@ -201,6 +188,22 @@ class EvalConfig(BaseConfig):
     online: Annotated[OnlineEvalConfig | None, Field(description="Whether to do online evaluation.")] = None
 
 
+class CheckpointConfig(BaseConfig):
+    """Configures checkpointing the orchestrator."""
+
+    path: Annotated[Path, Field(description="Directory to write checkpoints to.")] = Path("checkpoints")
+
+    interval: Annotated[int, Field(ge=1, description="Interval at which to save the checkpoint.")] = 50
+
+    resume_step: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description="Step to resume orchestrator from. If None, will start from scratch.",
+        ),
+    ] = None
+
+
 class OrchestratorConfig(BaseSettings):
     """Configures the orchestrator for RL training."""
 
@@ -225,6 +228,9 @@ class OrchestratorConfig(BaseSettings):
     # The monitor configuration
     monitor: MultiMonitorConfig = MultiMonitorConfig()
 
+    # The checkpoint configuration
+    ckpt: CheckpointConfig | None = None
+
     collate_mode: Annotated[Literal["packing", "padding"], Field(description="Collate mode to use.")] = "padding"
 
     batch_size: Annotated[int, Field(ge=1, description="Number of samples to train on per step.")] = 128
@@ -242,7 +248,7 @@ class OrchestratorConfig(BaseSettings):
         Field(
             description="Sequence length to use for training. If a sample is shorter than this, it will be padded. If a sequence is longer than this, it will be truncated.",
         ),
-    ] = 1024
+    ] = 2048
 
     # TODO(Mika): This should be automatic from the number of ZMQ connections
     num_train_workers: Annotated[
@@ -265,19 +271,26 @@ class OrchestratorConfig(BaseSettings):
         ),
     ] = 2
 
-    rollout: Annotated[
-        PathConfig,
+    rollout_path: Annotated[
+        Path,
         Field(
             description="Path to write inference outputs to. Will be populated by the orchestrator with responses from inference pool.",
         ),
-    ] = PathConfig(path=Path("rollouts"), clean=True)
+    ] = Path("rollouts")
 
-    weights: Annotated[
-        PathConfig,
+    weights_path: Annotated[
+        Path,
         Field(
             description="Path to read updated model weights from. Will be populated by the trainer.",
         ),
-    ] = PathConfig(path=Path("weights"), clean=True)
+    ] = Path("weights")
+
+    clean: Annotated[
+        bool,
+        Field(
+            description="Whether to clean the rollouts, checkpoint, checkpoint weights and logs directories at the beginning of the run. If True, will forceably, and irreversibly, delete all directories.",
+        ),
+    ] = False
 
     seed: Annotated[int | None, Field(description="Random seed for the orchestrator.")] = None
 

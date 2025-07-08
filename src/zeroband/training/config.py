@@ -1,3 +1,4 @@
+import warnings
 from pathlib import Path
 from typing import Annotated, Literal, TypeAlias, Union
 
@@ -53,21 +54,22 @@ class OptimizerConfig(BaseConfig):
 class CheckpointConfig(BaseConfig):
     """Configures checkpointing the full model, optimizer and training state for resuming training."""
 
-    path: Annotated[Path, Field(description="Path to write checkpoints to.")] = Path("checkpoints")
-
-    clean: Annotated[
-        bool,
-        Field(
-            description="Whether to clean the path at the beginning of the run. If True, will delete the entire directory.",
-        ),
-    ] = False
+    path: Annotated[Path, Field(description="Directory to write checkpoints to.")] = Path("checkpoints")
 
     interval: Annotated[int, Field(ge=1, description="Interval at which to save the checkpoint.")] = 50
 
-    resume_path: Annotated[
-        Path | None,
+    save_async: Annotated[
+        bool,
         Field(
-            description="Checkpoint path to resume training from. If None, will start from scratch.",
+            description="Whether to save the checkpoint asynchronously.",
+        ),
+    ] = False
+
+    resume_step: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description="Step to resume training from. If None, will start from scratch.",
         ),
     ] = None
 
@@ -92,9 +94,9 @@ class WeightCheckpointConfig(BaseConfig):
     save_async: Annotated[
         bool,
         Field(
-            description="Whether to save the checkpoint asynchronously.",
+            description="Whether to save the weights asynchronously.",
         ),
-    ] = True
+    ] = False
 
 
 class BaseGRPOVariantConfig(BaseConfig):
@@ -174,7 +176,7 @@ class TrainingConfig(BaseSettings):
     optim: OptimizerConfig = OptimizerConfig()
 
     # The checkpoint configuration
-    ckpt: CheckpointConfig = CheckpointConfig(path=Path("checkpoints"), clean=True)
+    ckpt: CheckpointConfig | None = None
 
     # The weight checkpoint configuration
     weights: WeightCheckpointConfig = WeightCheckpointConfig()
@@ -238,4 +240,35 @@ class TrainingConfig(BaseSettings):
     def auto_setup_orchestrator_log_level(self):
         if self.orchestrator:
             self.orchestrator.log.level = self.log.level
+        return self
+
+    @model_validator(mode="after")
+    def auto_setup_max_step(self):
+        if self.max_steps is not None and self.orchestrator:
+            self.orchestrator.max_steps = self.max_steps
+        return self
+
+    @model_validator(mode="after")
+    def auto_setup_orchestrator_ckpt(self):
+        if self.ckpt:
+            # Ensures that trainer and orchestrator checkpoints are synchronized
+            self.orchestrator.ckpt = CheckpointConfig()
+            self.orchestrator.ckpt.path = self.ckpt.path
+            self.orchestrator.ckpt.interval = self.ckpt.interval
+
+            if self.ckpt.resume_step and self.orchestrator.ckpt.resume_step is None:
+                self.orchestrator.ckpt.resume_step = self.ckpt.resume_step
+        return self
+
+    @model_validator(mode="after")
+    def warn_wandb_resume_id_missing(self):
+        if self.ckpt and self.ckpt.resume_step:
+            if self.monitor.wandb and not self.monitor.wandb.id:
+                warnings.warn(
+                    "W&B run ID is not set for trainer even though resuming training. The current run will be created as a new run."
+                )
+            if self.orchestrator.monitor.wandb and not self.orchestrator.monitor.wandb.id:
+                warnings.warn(
+                    "W&B run ID is not set for orchestrator even though resuming training. The current run will be created as a new run."
+                )
         return self

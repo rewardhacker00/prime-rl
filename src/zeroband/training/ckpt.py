@@ -1,150 +1,106 @@
 import threading
 import time
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import torch
-from torch.distributed.checkpoint.state_dict import _get_fqns as get_fqns
-from torch.distributed.tensor import DTensor
 from torch.optim.optimizer import Optimizer
-from transformers import AutoTokenizer
 
+from zeroband.training.config import CheckpointConfig
 from zeroband.training.model import Model
 from zeroband.training.world import get_world
 from zeroband.utils.logger import get_logger
 
 
 @dataclass
-class TrainingProgress:
+class Progress:
     step: int = 0
     total_tokens: int = 0
     total_samples: int = 0
 
 
-def save_full_checkpoint(
-    model: Model,
-    optimizers: list[Optimizer],
-    progress: TrainingProgress,
-    path: Path,
-):
-    # Get logger
-    logger = get_logger()
-    start_time = time.time()
-    logger.debug(f"Writing checkpoint to {path}")
+class CheckpointManager:
+    """Utility class to save and load training checkpoints to resume training."""
 
-    # Create checkpoint state
-    ckpt_state = {
-        "model": model.state_dict(),
-        "optimizers": [optimizer.state_dict() for optimizer in optimizers],
-        "progress": progress,
-    }
+    def __init__(self, config: CheckpointConfig):
+        self.path = config.path
+        self.save_async = config.save_async
+        self._logger = get_logger()
+        self._world = get_world()
 
-    # Create checkpoint directory if it doesn't exist
-    path.mkdir(parents=True, exist_ok=True)
-    local_path = path / f"local_rank_{get_world().local_rank}"
-    with open(local_path, "wb") as f:
-        torch.save(ckpt_state, f)
-    logger.debug(f"Checkpoint saved at {path} in {time.time() - start_time:.2f} seconds")
+    def _get_step_path(self, step: int) -> Path:
+        return self.path / f"step_{step}"
 
+    def _get_ckpt_path(self, step: int) -> Path:
+        ckpt_name = f"trainer_{self._world.local_rank}.pt" if self._world.world_size > 1 else "trainer.pt"
+        return self._get_step_path(step) / ckpt_name
 
-def load_full_checkpoint(
-    model: Model,
-    optimizers: list[Optimizer],
-    progress: TrainingProgress,
-    path: Path,
-):
-    # Get logger
-    logger = get_logger()
-    start_time = time.time()
-    logger.debug(f"Loading checkpoint from {path}")
+    def _save_to_path(self, ckpt_path: Path, model: Model, optimizers: list[Optimizer], progress: Progress):
+        self._logger.debug(f"Saving training checkpoint to {ckpt_path}")
+        start_time = time.time()
 
-    # Check local step path exists
-    local_path = path / f"local_rank_{get_world().local_rank}"
-    if not local_path.exists():
-        raise FileNotFoundError(f"Checkpoint step {progress.step} not found at {local_path}")
+        # Increment the progress step that is going to be saved
+        progress_copy = deepcopy(progress)
+        progress_copy.step += 1
 
-    # Load checkpoint state
-    with open(local_path, "rb") as f:
-        state = torch.load(f, weights_only=False)
+        # Create checkpoint state
+        ckpt_state = {
+            "model": model.state_dict(),
+            "optimizers": [optimizer.state_dict() for optimizer in optimizers],
+            "progress": progress_copy,
+        }
+        # Create checkpoint directory if it doesn't exist
+        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(ckpt_path, "wb") as f:
+            torch.save(ckpt_state, f)
+        self._logger.debug(f"Training checkpoint saved in {time.time() - start_time:.2f} seconds")
 
-    # Initialize model and optimizers
-    model.load_state_dict(state["model"])
-    for optimizer, optimizer_state in zip(optimizers, state["optimizers"]):
-        optimizer.load_state_dict(optimizer_state)
+    def _load_from_path(self, ckpt_path: Path, model: Model, optimizers: list[Optimizer], progress: Progress):
+        """Loads a checkpoint from a given path in-place."""
+        self._logger.debug(f"Loading training checkpoint from {ckpt_path}")
+        start_time = time.time()
 
-    # Update progress
-    progress.total_tokens = state["progress"].total_tokens
-    progress.step = state["progress"].step
-    progress.total_samples = state["progress"].total_samples
+        # Load checkpoint state
+        with open(ckpt_path, "rb") as f:
+            state = torch.load(f, weights_only=False)
 
-    logger.debug(f"Checkpoint loaded in {time.time() - start_time:.2f} seconds")
+        # Load checkpoint state in-place
+        model.load_state_dict(state["model"])
+        for optimizer, optimizer_state in zip(optimizers, state["optimizers"]):
+            optimizer.load_state_dict(optimizer_state)
 
+        # Load progress
+        for key, value in asdict(state["progress"]).items():
+            setattr(progress, key, value)
 
-def save_weight_checkpoint(
-    model: Model,
-    tokenizer: AutoTokenizer,
-    path: Path,
-    dtype: torch.dtype = torch.bfloat16,
-    async_save: bool = False,
-) -> Path:
-    """
-    Save a HF-compatible weight-only checkpoint to the specified path. Saves the
-    model weights as `model.pt`, the model config, generation arguments and tokenizer
-    using HF's `save_pretrained` method.
-    """
-    # Get logger and world info
-    logger = get_logger()
-    is_master = get_world().rank == 0
+        self._logger.debug(f"Training checkpoint loaded in {time.time() - start_time:.2f} seconds")
 
-    # Create checkpoint directory if it doesn't exist
-    if not path.exists():
-        path.mkdir(parents=True, exist_ok=True)
+    def load(self, model: Model, optimizers: list[Optimizer], progress: Progress, step: int) -> None:
+        """Loads a checkpoint from a given path in-place."""
+        ckpt_path = self._get_ckpt_path(step)
+        if not ckpt_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found at {ckpt_path}")
+        self._load_from_path(ckpt_path, model, optimizers, progress)
 
-    # Gather distributed weights for weight checkpoint
-    start_time = time.time()
-    logger.debug("Gathering sharded weights")
-    cpu_state = {}
-    for key, value in model.state_dict().items():
-        if isinstance(value, DTensor):
-            value = value.to(dtype)
-            # only gather after the downcast to dtype as it will be faster
-            value = value.full_tensor()
+    def save(
+        self,
+        model: Model,
+        optimizers: list[Optimizer],
+        progress: dict,
+        step: int,
+    ):
+        """Saves the full checkpoint state for a specified step."""
+        step_path = self._get_step_path(step)
+        step_path.mkdir(parents=True, exist_ok=True)
+        ckpt_path = self._get_ckpt_path(step)
 
-        if is_master:
-            key = get_fqns(model, key)
-            assert len(key) == 1
-            key = next(iter(key))
-            # TODO(Sami) Blocking to avoid race condition, should make non-blocking long-term tho
-            cpu_state[key] = value.to("cpu", non_blocking=False)
-
-    torch.distributed.barrier()
-    logger.debug(f"Gathered sharded weights in {time.time() - start_time:.2f} seconds")
-
-    model_path = path / "model.pt"
-
-    def _save_weight_checkpoint():
-        if is_master:
-            start_time = time.time()
-            logger.debug(f"Saving weights to {path}")
-
-            # Save model weights to temporary file to avoid race condition
-            tmp_model_path = path / "model.pt.tmp"
-            torch.save(cpu_state, tmp_model_path)
-
-            # Rename temporary file to indicate checkpoint is complete
-            tmp_model_path.rename(model_path)
-
-            # Save model config, generation arguments and tokenizer
-            model.config.save_pretrained(path)
-            model.generation_config.save_pretrained(path)
-            tokenizer.save_pretrained(path)
-
-            logger.debug(f"Saved weights to {path} in {time.time() - start_time:.2f} seconds")
-
-    if async_save:
-        thread = threading.Thread(target=_save_weight_checkpoint)
-        thread.start()
-    else:
-        _save_weight_checkpoint()
-
-    return model_path
+        if self.save_async:
+            # Run save in a separate thread
+            thread = threading.Thread(
+                target=self._save_to_path, args=(ckpt_path, model, optimizers, progress), name=f"ckpt-save-{step}"
+            )
+            thread.start()
+        else:
+            # Run save synchronously
+            self._save_to_path(ckpt_path, model, optimizers, progress)

@@ -16,6 +16,7 @@ from datasets import Dataset, load_dataset
 from transformers import AutoTokenizer
 
 from zeroband.eval.utils import run_benchmark
+from zeroband.training.orchestrator.ckpt import CheckpointManager, Progress
 from zeroband.training.orchestrator.client import (
     check_has_model,
     check_health,
@@ -53,13 +54,21 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
     logger.debug(f"EvaluationConfig({config.eval})")
 
     # Prepare paths to communicate with the trainer
-    if config.rollout.clean:
-        logger.debug(f"Cleaning rollout path ({config.rollout.path})")
-        shutil.rmtree(config.rollout.path, ignore_errors=True)
+    if config.clean:
+        logger.info("Cleaning checkpoint, logs, checkpoint weights and rollout directories")
+        if not (config.ckpt and config.ckpt.resume_step): # Only clean if we don't resume
+            logger.debug(f"Cleaning checkpoint path ({config.ckpt.path})")
+            shutil.rmtree(config.ckpt.path, ignore_errors=True)
 
-    if config.weights.clean:
-        logger.debug(f"Cleaning weights path ({config.weights.path})")
-        shutil.rmtree(config.weights.path, ignore_errors=True)
+        logger.debug(f"Cleaning logs path ({config.log.path})")
+        shutil.rmtree(config.log.path, ignore_errors=True)
+
+        if not (config.ckpt and config.ckpt.resume_step): # Only clean if we don't resume
+            logger.debug(f"Cleaning checkpoint weights path ({config.weights_path})")
+            shutil.rmtree(config.weights_path, ignore_errors=True)
+
+        logger.debug(f"Cleaning rollout path ({config.rollout_path})")
+        shutil.rmtree(config.rollout_path, ignore_errors=True)
 
     # Setup client
     logger.info(f"Initializing OpenAI client ({config.client.base_url})")
@@ -79,17 +88,29 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
     await check_has_model(client, config.model.name)
     logger.success("Inference pool ready")
 
-    # Reset weights to base model to allow reusing inference server across runs
-    logger.info("Resetting weights to base model")
-    await reset_weights(client)
+    # Get checkpoint manager
+    if config.ckpt:
+        ckpt_manager = CheckpointManager(config.ckpt)
+
+    # Reset weights to base model if starting from scratch
+    progress = Progress()
+    ckpt_step = 0
+    if config.ckpt and config.ckpt.resume_step:
+        logger.info(f"Resuming training from checkpoint step `{config.ckpt.resume_step}`")
+        ckpt_manager.load(progress, step=config.ckpt.resume_step)
+        ckpt_step = max(progress.step - config.async_level, 0)
+        await reload_weights(client, config.weights_path, ckpt_step)
+    else:
+        logger.info("Training from scratch. Resetting weights to base model")
+        await reset_weights(client)
 
     # Signal that setup is complete
     if setup_queue is not None:
         logger.info("Signaling trainer that orchestrator setup is complete")
         setup_queue.put("ready")
 
-    # Optionally, run evals on base model
-    if config.eval:
+    # Optionally, run evals on base model (only if starting from scratch)
+    if config.eval and not config.ckpt.resume_step:
         logger.info("Running evals on base model")
         for benchmark in config.eval.benchmarks:
             await run_benchmark(client, benchmark, config.model, config.sampling, step=0, use_tqdm=True)
@@ -110,26 +131,22 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
     dataset = dataset.shuffle(seed=config.seed)
 
     # Iterate over dataset in batches
-    max_steps = config.max_steps or int(1e9)
     steps_per_epoch = len(dataset) // (config.batch_size // config.sampling.n)
-    logger.info(f"Starting training loop (max_steps={max_steps}, steps_per_epoch={steps_per_epoch})")
-    total_tokens, total_samples = 0, 0
-    ckpt_step = 0
+    logger.info(f"Starting training loop ({steps_per_epoch=})")
     last_eval_step = -1
-    epoch = -1
+    while True:
+        if config.max_steps and progress.step >= config.max_steps:
+            break
 
-    for step in range(int(max_steps)):
         # Check if we need to start a new epoch
-        epoch_step = step % steps_per_epoch
+        epoch_step = progress.step % steps_per_epoch
         if epoch_step == 0:
-            epoch += 1
-            logger.info(f"Starting epoch {epoch}")
+            progress.epoch += 1
+            logger.info(f"Starting epoch {progress.epoch}")
             # Reshuffle dataset at the beginning of each epoch
-            dataset = dataset.shuffle(seed=(config.seed or 0) + epoch)
+            dataset = dataset.shuffle(seed=(config.seed or 0) + progress.epoch)
 
-        logger.debug(
-            f"Orchestrator step {step} (epoch: {epoch}, epoch_step: {epoch_step}/{steps_per_epoch}, checkpoint step: {ckpt_step})"
-        )
+        logger.debug(f"Orchestrator step {progress.step} ({ckpt_step=})")
         step_start_time = time.time()
 
         # Get the batch
@@ -142,23 +159,23 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Optionally, wait for the next checkpoint to be available
         wait_for_weight_ckpt_time, reload_weights_time = 0, 0
-        if step - ckpt_step > config.async_level:
+        if progress.step - ckpt_step > config.async_level:
             logger.debug(
-                f"Hit async barrier because step {step} is {step - ckpt_step} (>{config.async_level}) steps ahead of checkpoint step {ckpt_step}."
+                f"Hit async barrier because step {progress.step} is {progress.step - ckpt_step} (>{config.async_level}) steps ahead of checkpoint step {ckpt_step}."
             )
 
             # Wait for the checkpoint to be available
-            ckpt_step = step - config.async_level
+            ckpt_step = progress.step - config.async_level
             logger.debug(f"Waiting for weight checkpoint for step {ckpt_step}")
             wait_for_weight_ckpt_start_time = time.time()
-            wait_for_weight_checkpoint(config.weights.path, ckpt_step)
+            wait_for_weight_checkpoint(config.weights_path, ckpt_step)
             wait_for_weight_ckpt_time = time.time() - wait_for_weight_ckpt_start_time
             logger.debug(f"Waited {wait_for_weight_ckpt_time:.2f}s for weight checkpoint")
 
             # Reload the weights
             logger.debug(f"Reloading weights for step {ckpt_step}")
             reload_weights_start_time = time.time()
-            await reload_weights(client, config.weights.path, ckpt_step)
+            await reload_weights(client, config.weights_path, ckpt_step)
             reload_weights_time = time.time() - reload_weights_start_time
             logger.debug(f"Reloaded weights in {reload_weights_time:.2f}s")
 
@@ -182,7 +199,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Get the completions for the batch
         # TODO: Integrate with async (multi-turn) rollout function from verifiers
-        logger.debug(f"Sending {len(batch_messages)} inference requests for step {step}")
+        logger.debug(f"Sending {len(batch_messages)} inference requests for step {progress.step}")
         generate_completions_start_time = time.time()
         # These calls are intentionally non-concurrent because we found that /tokenize is sometimes returning a httpx.ReadError when calling this endpoint concurrently
         input_tokens = [await tokenize(client, config.model, messages) for messages in batch_messages]
@@ -201,7 +218,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
 
         # Get the rewards for the completions
         # TODO: Integrate with async scoring function from verifiers
-        logger.debug(f"Computing rewards and advantages for step {step}")
+        logger.debug(f"Computing rewards and advantages for step {progress.step}")
         compute_rewards_start_time = time.time()
         task_types = [problem["task_type"] for problem in problems]
         verification_infos = [json.loads(problem["verification_info"]) for problem in problems]
@@ -216,8 +233,9 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         num_input_tokens = sum(completion.usage.prompt_tokens for completion in chat_completions)
         num_output_tokens = sum(completion.usage.completion_tokens for completion in chat_completions)
         num_tokens = num_input_tokens + num_output_tokens
-        total_tokens += num_tokens
-        total_samples += config.batch_size
+        progress.total_tokens += num_tokens
+        progress.total_samples += config.batch_size
+        progress.total_problems += config.batch_size // config.sampling.n
         throughput = num_tokens / (generate_completions_time + compute_rewards_time)
         avg_seq_length = num_tokens / config.batch_size
 
@@ -228,7 +246,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
                 output_tokens=output_tokens,
                 rewards=rewards,
                 advantages=advantages,
-                step=step,
+                step=progress.step,
             )
 
         # Write serialized batch to disk for trainer workers to consume
@@ -246,27 +264,34 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
             collate_mode=config.collate_mode,
         )
 
-        step_path = Path(config.rollout.path) / f"step_{step}"
+        save_ckpt_time = 0
+        if config.ckpt and config.ckpt.interval and (progress.step + 1) % config.ckpt.interval == 0:
+            logger.debug(f"Saving checkpoint at step {progress.step}")
+            save_ckpt_start_time = time.time()
+            ckpt_manager.save(progress, step=progress.step + 1)
+            save_ckpt_time = time.time() - save_ckpt_start_time
+
+        step_path = Path(config.rollout_path) / f"step_{progress.step}"
         step_path.mkdir(parents=True, exist_ok=True)
         for i, batches in enumerate(all_data_ranks_batches):
             batch_path = step_path / f"rank_{i}.pt"
             tmp_path = batch_path.with_suffix(".tmp")
-            logger.debug(f"Saving rollouts for step {step} for rank {i} to {batch_path}")
+            logger.debug(f"Saving rollouts for step {progress.step} for rank {i} to {batch_path}")
             torch.save(batches, tmp_path)
             tmp_path.rename(batch_path)
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        step_message = f"Orchestrator | step {step} | Time:{step_time:.2f}s | Avg. Reward: {np.mean(rewards):.2f} | Avg. Advantage: {np.mean(advantages):.2f} | Throughput: {throughput:.1f} tokens/s | Avg. Seq. Length: {avg_seq_length:.1f} tokens/sample"
+        step_message = f"Orchestrator | step {progress.step} | Time:{step_time:.2f}s | Avg. Reward: {np.mean(rewards):.2f} | Avg. Advantage: {np.mean(advantages):.2f} | Throughput: {throughput:.1f} tokens/s | Avg. Seq. Length: {avg_seq_length:.1f} tokens/sample"
         logger.info(step_message)
 
         # Log progress metrics to monitor
         progress_metrics = {
-            "progress/infer/total_tokens": total_tokens,
-            "progress/infer/total_samples": total_samples,
-            "progress/train/step": ckpt_step,  # Shared W&B axis
-            "progress/train/epoch": epoch,
-            "step": step,
+            "progress/orchestrator/total_tokens": progress.total_tokens,
+            "progress/orchestrator/total_samples": progress.total_samples,
+            "progress/orchestrator/epoch": progress.epoch,
+            "progress/orchestrator/step": ckpt_step,  # Shared W&B axis
+            "step": progress.step,
         }
         monitor.log(progress_metrics)
 
@@ -274,7 +299,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         perf_metrics = {
             "perf/infer/throughput": throughput,
             "perf/infer/seq_len": avg_seq_length,
-            "step": step,
+            "step": progress.step,
         }
         monitor.log(perf_metrics)
 
@@ -284,20 +309,24 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
             "reward/reward_std": np.std(rewards),
             "reward/advantage": np.mean(advantages),
             "reward/advantage_std": np.std(advantages),
-            "step": step,
+            "step": progress.step,
         }
         monitor.log(reward_metrics)
 
         # Log time metrics to monitor
         time_metrics = {
-            "time/infer": step_time,
-            "time/infer/wait_for_weight_ckpt": wait_for_weight_ckpt_time,
-            "time/infer/generate_completions": generate_completions_time,
-            "time/infer/compute_rewards": compute_rewards_time,
-            "time/infer/reload_weights": reload_weights_time,
-            "step": step,
+            "time/orchestrator": step_time,
+            "time/orchestrator/wait_for_weight_ckpt": wait_for_weight_ckpt_time,
+            "time/orchestrator/generate_completions": generate_completions_time,
+            "time/orchestrator/compute_rewards": compute_rewards_time,
+            "time/orchestrator/reload_weights": reload_weights_time,
+            "time/orchestrator/save_ckpt": save_ckpt_time,
+            "step": progress.step,
         }
         monitor.log(time_metrics)
+
+        # Increment progress
+        progress.step += 1
 
     logger.success("Orchestrator finished.")
 

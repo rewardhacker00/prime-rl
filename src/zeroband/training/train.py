@@ -5,6 +5,7 @@ import shutil
 import time
 from collections import defaultdict
 from pathlib import Path
+from copy import deepcopy
 
 # Import environment before any other imports
 # ruff: noqa: I001
@@ -15,12 +16,8 @@ import torch
 import torch.distributed as dist
 from torch._guards import log as torch_log
 
-from zeroband.training.ckpt import (
-    TrainingProgress,
-    load_full_checkpoint,
-    save_full_checkpoint,
-    save_weight_checkpoint,
-)
+from zeroband.training.ckpt import CheckpointManager, Progress
+from zeroband.training.weights import save_weight_checkpoint
 from zeroband.training.config import TrainingConfig
 from zeroband.training.data import DataLoader, FakeDataLoader
 from zeroband.training.logger import setup_logger
@@ -82,11 +79,6 @@ def train(config: TrainingConfig):
         else:
             raise RuntimeError(f"Unexpected signal from orchestrator: {signal}")
 
-    # Optionally, clean the checkpoints path
-    if config.ckpt.clean:
-        logger.debug(f"Cleaning checkpoint path {config.ckpt.path}")
-        shutil.rmtree(config.ckpt.path, ignore_errors=True)
-
     # TODO(Mika): Move this to typed env var
     # Allow eager fallback during production so that training runs don't die if compile fails
     if "ZERO_BAND_DEV" not in os.environ:
@@ -110,15 +102,6 @@ def train(config: TrainingConfig):
     model = setup_model(config.model)
     tokenizer = get_tokenizer(config.model)
 
-    # Optionally, initialize a model to compute logprobs
-    if config.recompute_logprobs:
-        logger.info(f"Initializing logprob model ({config.model})")
-        logprob_model = setup_model(config.model)
-
-        # Offload the logprob model to CPU
-        tensor_offloaded_repository: dict[int, OffloadedTensor] = {}
-        tensor_offloaded_repository[0] = offload_model_to_cpu(logprob_model)
-
     # Set up the optimizer
     optimizer = torch.optim.AdamW(
         params=model.parameters(),
@@ -127,11 +110,32 @@ def train(config: TrainingConfig):
         betas=(config.optim.betas1, config.optim.betas2),
     )
 
+    # Get checkpoint manager
+    if config.ckpt:
+        ckpt_manager = CheckpointManager(config.ckpt)
+
     # Optionally, resume training from a checkpoint
-    progress = TrainingProgress()
-    if config.ckpt.resume_path:
-        logger.info(f"Resuming training from checkpoint {config.ckpt.resume_path}")
-        load_full_checkpoint(model, [optimizer], progress, config.ckpt.resume_path)
+    progress = Progress()
+    if config.ckpt and config.ckpt.resume_step:
+        logger.info(f"Resuming training from checkpoint step `{config.ckpt.resume_step}`")
+        ckpt_manager.load(model, [optimizer], progress, step=config.ckpt.resume_step)
+
+    # Optionally, initialize a model to compute logprobs
+    if config.recompute_logprobs:
+        # Offload the logprob model to CPU
+        tensor_offloaded_repository: dict[int, OffloadedTensor] = {}
+        infer_step = max(progress.step - config.async_level, 0)
+        for async_step in range(infer_step, progress.step + 1):
+            logger.info(f"Initializing logprob model ({config.model}) for step {async_step}")
+            model_name_or_path = (
+                config.model.name
+                if not (config.ckpt and config.ckpt.resume_step)
+                else config.weights.path / f"step_{async_step}"
+            )
+            model_config = deepcopy(config.model)
+            model_config.name = model_name_or_path
+            logprob_model = setup_model(model_config)
+            tensor_offloaded_repository[async_step] = offload_model_to_cpu(logprob_model)
 
     # Set up the data loader (Optionally, use a fake data loader for debugging)
     logger.info(f"Initializing data loader ({config.data})")
@@ -281,15 +285,17 @@ def train(config: TrainingConfig):
             logger.info(f"Broadcasting weights from {model_path} via shardcast")
             shardcast.broadcast(model_path.as_posix())  # TODO: Is this blocking?
 
-        # Optionally, remove old weight checkpoints to save space
-        # +1 to ensure to not delete current checkpoint when async_level=0
-        if len(active_weight_checkpoint_paths) > config.async_level + 1:
-            path_to_delete = active_weight_checkpoint_paths.pop(0)
-            ckpt_step = int(path_to_delete.name.split("_")[-1])
-            should_keep = config.weights.interval and ckpt_step % config.weights.interval == 0
-            if not should_keep:
-                logger.debug(f"Removing past weight checkpoint ({path_to_delete})")
-                shutil.rmtree(path_to_delete, ignore_errors=True)
+        # Consider cleaning up weight ckpt from async_level+1 steps ago
+        candidate_path_to_delete = Path(config.weights.path) / f"step_{max(progress.step - (config.async_level + 1), 0)}"
+        logger.debug(f"Considering to delete weight checkpoint {candidate_path_to_delete}")
+        candidate_weight_step_to_delete = int(candidate_path_to_delete.name.split("_")[-1])
+        keep_for_eval = config.weights.interval and candidate_weight_step_to_delete % config.weights.interval == 0
+        # For checkpointing step x, we need all weight checkpoints in [x-async_level, x] (for logprob model)
+        # To get [n-k, n] with interval n and buffer k over all natural numbers x, we use the condition (n - (x % n)) % n <= k
+        keep_for_ckpt = config.ckpt and (config.ckpt.interval - (candidate_weight_step_to_delete % config.ckpt.interval)) % config.ckpt.interval <= config.async_level 
+        if not (keep_for_eval or keep_for_ckpt):
+            logger.debug(f"Removing past weight checkpoint {candidate_path_to_delete} ({keep_for_eval=}, {keep_for_ckpt=})")
+            shutil.rmtree(candidate_path_to_delete, ignore_errors=True)
 
         # Optionally, dump memory snapshot
         if config.profile_path and progress.step == 2 and world.rank == 0:
@@ -299,14 +305,6 @@ def train(config: TrainingConfig):
                 profile_path = profile_path.with_suffix(".pickle")
             torch.cuda.memory._dump_snapshot(profile_path.as_posix())
             torch.cuda.memory._record_memory_history(enabled=False)
-
-        # Optionally, save the full checkpoint
-        save_ckpt_time = 0
-        if config.ckpt and config.ckpt.interval and progress.step % config.ckpt.interval == 0:
-            logger.debug(f"Saving checkpoint at step {progress.step}")
-            save_ckpt_start_time = time.time()
-            save_full_checkpoint(model, [optimizer], progress, config.ckpt.path)
-            save_ckpt_time = time.time() - save_ckpt_start_time
 
         # Update the CPU logprob model to updated model
         if config.recompute_logprobs:
@@ -325,6 +323,16 @@ def train(config: TrainingConfig):
         throughput = perf_counter.get_tokens_per_second() or 0
         mfu = perf_counter.get_mfu() or 0
         loss_metrics = {key: value.item() for key, value in loss_metrics.items()}
+
+        # Optionally, save the full checkpoint
+        # We save the checkpoint here, because the total_tokens and total_samples are updated yet
+        # But because the step is only incremented at the end of the step, we need to increment it manually for the checkpoint
+        save_ckpt_time = 0
+        if config.ckpt and config.ckpt.interval and (progress.step + 1) % config.ckpt.interval == 0:
+            logger.debug(f"Saving checkpoint at step {progress.step}")
+            save_ckpt_start_time = time.time()
+            ckpt_manager.save(model, [optimizer], progress, step=progress.step + 1)
+            save_ckpt_time = time.time() - save_ckpt_start_time
 
         # Log step metrics
         step_time = time.time() - step_start_time
