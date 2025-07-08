@@ -290,7 +290,7 @@ class OrchestratorConfig(BaseSettings):
         Field(
             description="Whether to clean the rollouts, checkpoint, checkpoint weights and logs directories at the beginning of the run. If True, will forceably, and irreversibly, delete all directories.",
         ),
-    ] = False
+    ] = True
 
     bench: Annotated[
         bool,
