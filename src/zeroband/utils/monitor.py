@@ -225,6 +225,7 @@ class MultiMonitor:
         run_config: BaseSettings | None = None,
     ):
         self.logger = get_logger()
+        self.history: list[dict[str, Any]] = []
         # Initialize outputs
         self.outputs: dict[MonitorType, Monitor] = {}
         self.wandb = None
@@ -256,6 +257,7 @@ class MultiMonitor:
         exclude: list[MonitorType] = [],
     ) -> None:
         """Logs metrics to all outputs."""
+        self.history.append(metrics)
         if self.disabled:
             return
         self.logger.debug(f"Logging metrics: {metrics}")

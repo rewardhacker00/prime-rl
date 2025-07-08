@@ -292,6 +292,13 @@ class OrchestratorConfig(BaseSettings):
         ),
     ] = False
 
+    bench: Annotated[
+        bool,
+        Field(
+            description="Whether to run in benchmark mode. It will automatically set the maximum number of steps to run to 5, max async level to ~infinity and disable W&B.",
+        ),
+    ] = False
+
     seed: Annotated[int | None, Field(description="Random seed for the orchestrator.")] = None
 
     @model_validator(mode="after")
@@ -302,4 +309,12 @@ class OrchestratorConfig(BaseSettings):
             raise ValueError("Batch size must be divisible by micro batch size")
         if self.batch_size < self.micro_batch_size:
             raise ValueError("Batch size must be greater than or equal to micro batch size")
+        return self
+
+    @model_validator(mode="after")
+    def validate_bench(self):
+        if self.bench:
+            self.max_steps = 6  # Run for 1 warmup step + 5 evaluation steps
+            self.async_level = 1e9  # Never wait for RL weight checkpoints
+
         return self

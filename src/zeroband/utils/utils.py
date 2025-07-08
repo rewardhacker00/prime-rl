@@ -1,5 +1,6 @@
 import functools
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -125,3 +126,86 @@ def wait_for_path(path: Path, interval: int = 1, log_interval: int = 10) -> None
             logger.debug(f"Waiting for path `{path}` for {wait_time} seconds")
         time.sleep(interval)
         wait_time += interval
+
+
+def to_col_format(list_of_dicts: list[dict[str, Any]]) -> dict[str, list[Any]]:
+    """
+    Turns a list of dicts to a dict of lists.
+
+    Example:
+
+    ```python
+    list_of_dicts = [{"a": 1, "b": 2}, {"a": 3, "b": 4}] # Row format
+    to_col_format(list_of_dicts)
+    ```
+
+    Returns:
+
+    ```python
+    {"a": [1, 3], "b": [2, 4]} # Column format
+    ```
+    """
+    dict_of_lists = defaultdict(list)
+    for row in list_of_dicts:
+        for key, value in row.items():
+            dict_of_lists[key].append(value)
+    return dict(dict_of_lists)
+
+
+def to_row_format(dict_of_lists: dict[str, list[Any]]) -> list[dict[str, Any]]:
+    """
+    Turns a dict of lists to a list of dicts.
+
+    Example:
+
+    ```python
+    dict_of_lists = {"a": [1, 3], "b": [2, 4]} # Column format
+    to_row_format(dict_of_lists)
+    ```
+
+    Returns:
+
+    ```python
+    [{"a": 1, "b": 2}, {"a": 3, "b": 4}] # Row format
+    ```
+    """
+    return [dict(zip(dict_of_lists.keys(), values)) for values in zip(*dict_of_lists.values())]
+
+
+def format_time(time_in_seconds: float) -> str:
+    """Format a time in seconds to a human-readable format."""
+    from datetime import timedelta
+
+    td = timedelta(seconds=time_in_seconds)
+    days = td.days
+    hours, remainder = divmod(td.seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+
+    # Format based on magnitude
+    if days > 0:
+        total_hours = days * 24 + hours
+        return f"{total_hours + minutes / 60:.2f}h"
+    elif hours > 0:
+        return f"{hours + minutes / 60:.2f}h"
+    elif minutes > 0:
+        return f"{minutes + seconds / 60:.2f}m"
+    else:
+        # Include microseconds for sub-second precision
+        total_seconds = seconds + td.microseconds / 1_000_000
+        return f"{total_seconds:.2f}s"
+
+
+def format_num(num: float | int, precision: int = 2) -> str:
+    """
+    Format a number in human-readable format with abbreviations.
+    """
+    sign = "-" if num < 0 else ""
+    num = abs(num)
+    if num < 1e3:
+        return f"{sign}{num:.{precision}f}" if isinstance(num, float) else f"{sign}{num}"
+    elif num < 1e6:
+        return f"{sign}{num / 1e3:.{precision}f}K"
+    elif num < 1e9:
+        return f"{sign}{num / 1e6:.{precision}f}M"
+    else:
+        return f"{sign}{num / 1e9:.{precision}f}B"
