@@ -8,7 +8,7 @@ from rich.console import Console
 from rich.table import Table
 
 from zeroband.training.orchestrator.genesys import TaskType, get_reward_function
-from zeroband.utils.utils import format_num, format_time, wait_for_path
+from zeroband.utils.utils import format_num, format_time, get_weight_ckpt_model_path, wait_for_path
 
 
 def parse_logprobs(chat_completions: list[ChatCompletion]) -> list[list[float]]:
@@ -51,7 +51,7 @@ def parse_completions(chat_completions: list[ChatCompletion]) -> list[str]:
 
 
 def wait_for_weight_checkpoint(path: Path, step: int, interval: int = 1, log_interval: int = 10) -> None:
-    model_path = Path(path) / f"step_{step}" / "pytorch_model.bin"
+    model_path = get_weight_ckpt_model_path(path, step)
     wait_for_path(model_path, interval, log_interval)
 
 
