@@ -248,7 +248,6 @@ def train(config: TrainingConfig):
             importance_ratio = importance_ratio / num_micro_batches
 
             # Backward pass (ensures loss reduction across FSDP ranks)
-            logger.debug(f"Backward pass on micro batch {micro_step} / {num_micro_batches}")
             loss.backward()
 
             loss_metrics["loss/loss"] += loss.detach().clone()
