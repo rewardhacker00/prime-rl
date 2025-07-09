@@ -136,18 +136,17 @@ def extract_toml_paths(args: list[str]) -> tuple[list[str], list[str]]:
     recurence = False
     cli_toml_file_count = 0
     for arg, next_arg in zip(args, args[1:] + [""]):
-        if arg.startswith("@"):
-            toml_path: str
-            if arg == "@":  # We assume that the next argument is a toml file path
-                toml_path = next_arg
-                remaining_args.remove(arg)
-                remaining_args.remove(next_arg)
-            else:  # We assume that the argument is a toml file path
-                remaining_args.remove(arg)
-                toml_path = arg.replace("@", "")
+        print(f"arg: {arg}, next_arg: {next_arg}")
+        if arg == "@":
+            toml_path = next_arg
+            remaining_args.remove(arg)
+            remaining_args.remove(next_arg)
 
             recurence = recurence or check_path_and_handle_inheritance(Path(toml_path), toml_paths)
             cli_toml_file_count += 1
+
+        elif arg.startswith("@"):
+            raise ValueError(" @ should only be user as standlone character, not leading a string")
 
     if recurence and cli_toml_file_count > 1:
         warnings.warn(
