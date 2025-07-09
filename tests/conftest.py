@@ -7,7 +7,7 @@ import pytest
 from huggingface_hub import HfApi
 from loguru import logger
 
-from zeroband.training.world import reset_world
+from zeroband.trainer.world import reset_world
 from zeroband.utils.logger import reset_logger, set_logger
 
 TIMEOUT = 120
@@ -105,8 +105,8 @@ def run_processes() -> Callable[[list[Command], list[Environment], int], list[Pr
     return run_subprocesses_in_parallel
 
 
-VLLM_SERVER_ENV = {"CUDA_VISIBLE_DEVICES": "1"}
-VLLM_SERVER_CMD = ["uv", "run", "infer", "@configs/inference/reverse_text.toml"]
+VLLM_SERVER_ENV = {"CUDA_VISIBLE_DEVICES": "0"}
+VLLM_SERVER_CMD = ["uv", "run", "inference", "@", "configs/inference/reverse_text.toml"]
 
 
 @pytest.fixture(scope="session")
@@ -124,7 +124,7 @@ def vllm_server() -> Generator[None, None, None]:
     # Default vLLM server URL
     base_url = "http://localhost:8000"
 
-    async def wait_for_server_health(timeout: int = 120, interval: int = 1) -> bool:
+    async def wait_for_server_health(timeout: int = 180, interval: int = 1) -> bool:
         """Wait for the server to be healthy by checking the /health endpoint."""
         health_url = f"{base_url}/health"
         start_time = time.time()

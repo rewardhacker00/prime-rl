@@ -1,9 +1,11 @@
 import sys
+import uuid
 import warnings
 from pathlib import Path
 from typing import Annotated, ClassVar, Type, TypeVar
 
 import tomli
+import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings as PydanticBaseSettings
 from pydantic_settings import (
@@ -39,6 +41,7 @@ class BaseSettings(PydanticBaseSettings, BaseConfig):
         list[str] | None,
         Field(
             description="List of extra TOML files to load (paths are relative to the TOML file containing this field). If provided, will override all other config files. Note: This field is only read from within configuration files - setting --toml-files from CLI has no effect.",
+            exclude=True,
         ),
     ] = None
 
@@ -90,16 +93,25 @@ class BaseSettings(PydanticBaseSettings, BaseConfig):
         cli_kebab_case=True,
         cli_implicit_flags=True,
         cli_use_class_docs_for_groups=True,
+        nested_model_default_partial_update=True,  # Allows partial updates to nested model default objects
     )
 
 
-def check_path_and_handle_inheritance(path: Path, seen_files: list[Path]) -> bool | None:
+def get_temp_toml_file():
+    temp_uuid = str(uuid.uuid4())
+    root_path = Path(".pydantic_config")
+    root_path.mkdir(exist_ok=True)
+    return root_path / f"temp_{temp_uuid}.toml"
+
+
+def check_path_and_handle_inheritance(path: Path, seen_files: list[Path], nested_key: str | None) -> bool | None:
     """
     Recursively look for inheritance in a toml file. Return a list of all toml files to load.
 
     Example:
         If config.toml has `toml_files = ["base.toml"]` and base.toml has
         `toml_files = ["common.toml"]`, this returns ["config.toml", "base.toml", "common.toml"]
+        nested_key: smth like "train.optim"
 
     Returns:
         True if some toml inheritance is detected, False otherwise.
@@ -110,20 +122,34 @@ def check_path_and_handle_inheritance(path: Path, seen_files: list[Path]) -> boo
     if not path.exists():
         raise FileNotFoundError(f"TOML file {path} does not exist")
 
-    seen_files.append(path)
-
     with open(path, "rb") as f:
         data = tomli.load(f)
 
+    if nested_key is not None:
+        nested_keys = nested_key.split(".")
+        for key in nested_keys:
+            new_data = {}
+            new_data[key] = data
+            data = new_data
+
+        path = get_temp_toml_file()
+
+        with open(path, "wb") as f:
+            tomli_w.dump(data, f)
+
+    seen_files.append(path)
+
     recurence = False
     if "toml_files" in data:
+        if nested_key is not None:
+            raise NotImplementedError("--train @ helo.toml where helo.toml point to a tom file is not yet supported")
         maybe_new_files = [path.parent / file for file in data["toml_files"]]
 
         files = [file for file in maybe_new_files if str(file).endswith(".toml")]
         # todo which should probably look for infinite inheritance loops here
         for file in files:
             recurence = True
-            check_path_and_handle_inheritance(file, seen_files)
+            check_path_and_handle_inheritance(file, seen_files, nested_key=None)
 
     return recurence
 
@@ -135,18 +161,19 @@ def extract_toml_paths(args: list[str]) -> tuple[list[str], list[str]]:
     remaining_args = args.copy()
     recurence = False
     cli_toml_file_count = 0
-    for arg, next_arg in zip(args, args[1:] + [""]):
-        if arg.startswith("@"):
-            toml_path: str
-            if arg == "@":  # We assume that the next argument is a toml file path
-                toml_path = next_arg
-                remaining_args.remove(arg)
-                remaining_args.remove(next_arg)
-            else:  # We assume that the argument is a toml file path
-                remaining_args.remove(arg)
-                toml_path = arg.replace("@", "")
+    for prev_arg, arg, next_arg in zip([""] + args[:-1], args, args[1:] + [""]):
+        if arg == "@":
+            toml_path = next_arg
+            remaining_args.remove(arg)
+            remaining_args.remove(next_arg)
 
-            recurence = recurence or check_path_and_handle_inheritance(Path(toml_path), toml_paths)
+            if prev_arg.startswith("--"):
+                remaining_args.remove(prev_arg)
+                nested_key = prev_arg.replace("--", "")
+            else:
+                nested_key = None
+
+            recurence = recurence or check_path_and_handle_inheritance(Path(toml_path), toml_paths, nested_key)
             cli_toml_file_count += 1
 
     if recurence and cli_toml_file_count > 1:
@@ -179,7 +206,7 @@ def get_all_fields(model: BaseModel | type) -> list[str]:
     for name, field in model_cls.model_fields.items():
         field_type = field.annotation
         fields.append(name)
-        if hasattr(field_type, "model_fields"):
+        if field_type is not None and hasattr(field_type, "model_fields"):
             sub_fields = get_all_fields(field_type)
             fields.extend(f"{name}.{sub}" for sub in sub_fields)
     return fields

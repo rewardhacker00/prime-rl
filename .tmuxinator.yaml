@@ -1,24 +1,34 @@
-name: debug
+name: rl
 enable_pane_titles: true
 
-# Start trainer + orchestrator in background
-on_project_start: CUDA_VISIBLE_DEVICES=1 uv run train @ configs/training/reverse_text.toml > /dev/null 2>&1 & 
-
 windows:
-  - RL:
-      layout: tiled
+  - Entrypoint:
+      layout: even-vertical
+      panes:
+        - Inference:
+        - RL:
+  - Training:
+      layout: even-vertical
       panes:
         - Orchestrator:
-          - echo "Waiting for orchestrator to start..." && sleep 10 && less -R +F logs/orchestrator.log
-        - Inference:
-          - export CUDA_VISIBLE_DEVICES=0
-          - uv run infer @ configs/inference/reverse_text.toml --disable-log-requests
-        - Training:
-          - echo "Waiting for training to start..." && sleep 10 && less -R +F logs/train.log
+          - |
+            while true; do
+              echo "Waiting for orchestrator log file..."
+              while [ ! -f logs/orchestrator.log ]; do sleep 1; done
+              echo "Following orchestrator.log..."
+              tail -F logs/orchestrator.log
+            done
+        - Trainer:
+          - |
+            while true; do
+              echo "Waiting for trainer log file..."
+              while [ ! -f logs/trainer.log ]; do sleep 1; done
+              echo "Following trainer.log..."
+              tail -F logs/trainer.log
+            done
   - Monitor:
       layout: even-horizontal
       panes:
-        - CPU:
-          - htop
-        - GPU:
-          - nvtop
+        - GPU: nvtop
+        - CPU: htop
+            

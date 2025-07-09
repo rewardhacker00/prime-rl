@@ -4,7 +4,7 @@ from typing import Annotated
 from pydantic import Field
 
 from zeroband.eval.registry import Benchmark
-from zeroband.training.orchestrator.config import (
+from zeroband.orchestrator.config import (
     ClientConfig,
     LogConfig,
     SamplingConfig,
@@ -64,7 +64,7 @@ class EvalConfig(BaseSettings):
     monitor: MultiMonitorConfig = MultiMonitorConfig()
 
     # The logging configuration
-    log: LogConfig = LogConfig(path=Path("logs/eval"))
+    log: LogConfig = LogConfig(path="logs/eval")
 
     use_tqdm: Annotated[
         bool,
