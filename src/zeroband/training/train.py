@@ -231,6 +231,7 @@ def train(config: TrainingConfig):
         if config.profile_path and world.rank == 0:
             torch.cuda.memory._record_memory_history()
 
+        forward_backward_start_time = time.time()
         loss_metrics = defaultdict(float)
         num_micro_batches = len(micro_batches)
         for micro_step, micro_batch in enumerate(micro_batches, start=1):
@@ -298,6 +299,8 @@ def train(config: TrainingConfig):
         optimizer.step()
         optimizer.zero_grad()
 
+        forward_backward_time = time.time() - forward_backward_start_time
+
         # Optionally, broadcast the weight checkpoint from master rank
         if world.rank == 0 and envs.SHARDCAST_OUTPUT_DIR is not None:
             logger.info(f"Broadcasting weights from {model_path} via shardcast")
@@ -360,8 +363,10 @@ def train(config: TrainingConfig):
             "time/train/wait_for_batch": wait_for_batch_time,
             "time/train/load_data": load_data_time,
             "time/train/save_weights": save_weights_time,
-            "time/train/compute_logprobs": compute_logprobs_time,
+            "time/train/compute/logprobs": compute_logprobs_time,
             "time/train/save_ckpt": save_ckpt_time,
+            "time/train/compute/forward_backward": forward_backward_time,
+            "time/train/compute": forward_backward_time + compute_logprobs_time,
             "step": progress.step,
         }
         monitor.log(time_metrics)

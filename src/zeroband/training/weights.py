@@ -79,11 +79,6 @@ class WeightCheckpointManager:
 
         self._logger.debug(f"Saved weight checkpoint to {step_path} in {time.time() - start_time:.2f} seconds")
 
-    def _save(self, model: Model, tokenizer: AutoTokenizer, dtype: torch.dtype, step: int):
-        """Synchronous helper of `save`."""
-        cpu_state = self._gather_weights(model, dtype)
-        self._save_to_path(cpu_state, model, tokenizer, step)
-
     def save(
         self,
         model: Model,
@@ -92,16 +87,19 @@ class WeightCheckpointManager:
         dtype: torch.dtype = torch.bfloat16,
     ):
         """Save a HF-compatible weight-only checkpoint for a given step."""
+        cpu_state = self._gather_weights(model, dtype)
 
-        if self.config.save_async:
-            thread = threading.Thread(
-                target=self._save,
-                args=(model, tokenizer, dtype, step),
-                name=f"weight-checkpoint-save-{step}",
-            )
-            thread.start()
-        else:
-            self._save(model, tokenizer, dtype, step)
+        if self._is_master:
+            if self.config.save_async:
+                thread = threading.Thread(
+                    target=self._save_to_path,
+                    args=(cpu_state, model, tokenizer, step),
+                    name=f"weight-checkpoint-save-{step}",
+                )
+                thread.start()
+            else:
+                self._save_to_path(cpu_state, model, tokenizer, step)
+
         return self._get_model_path(step)
 
     def _maybe_clean(self, step: int):
