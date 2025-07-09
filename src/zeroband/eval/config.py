@@ -3,16 +3,40 @@ from typing import Annotated
 
 from pydantic import Field
 
+from zeroband.eval.registry import Benchmark
 from zeroband.training.orchestrator.config import (
     ClientConfig,
     LogConfig,
     SamplingConfig,
 )
-from zeroband.training.orchestrator.config import (
-    EvalConfig as OrchestratorEvalConfig,
-)
 from zeroband.utils.config import ModelConfig, MultiMonitorConfig
-from zeroband.utils.pydantic_config import BaseSettings
+from zeroband.utils.pydantic_config import BaseConfig, BaseSettings
+
+
+class OnlineEvalConfig(BaseConfig):
+    """Configures online evaluation."""
+
+    ckpt_path: Annotated[
+        Path,
+        Field(
+            description="Path to read checkpoints from when doing online evaluation. Expects subdirectories named 'step_x' within the directory.",
+        ),
+    ] = Path("checkpoints")
+
+    interval: Annotated[
+        int,
+        Field(
+            ge=0,
+            description="Interval at which to evaluate the model.",
+        ),
+    ] = 100
+
+    max_steps: Annotated[
+        int | None,
+        Field(
+            description="Maximum number of steps to run online evaluation for. If None, will run indefinitely.",
+        ),
+    ] = None
 
 
 class EvalConfig(BaseSettings):
@@ -27,8 +51,14 @@ class EvalConfig(BaseSettings):
     # The sampling configuration
     sampling: SamplingConfig = SamplingConfig()
 
-    # The evaluation configuration
-    eval: OrchestratorEvalConfig = OrchestratorEvalConfig()
+    benchmarks: Annotated[
+        list[Benchmark],
+        Field(
+            description="Benchmarks to evaluate on. By default, it will evaluate only on the MATH-500 benchmark.",
+        ),
+    ] = ["math500"]
+
+    online: Annotated[OnlineEvalConfig | None, Field(description="Whether to do online evaluation.")] = None
 
     # The monitor configuration
     monitor: MultiMonitorConfig = MultiMonitorConfig()

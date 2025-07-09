@@ -15,6 +15,11 @@ batch_size = 2048
 micro_batch_size = 1
 seq_len = 8192
 
+[orchestrator.eval]
+interval = 50
+benchmarks = ["math500"]
+
+
 [orchestrator.data]
 name = "PrimeIntellect/INTELLECT-2-only-math"
 

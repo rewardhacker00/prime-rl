@@ -110,12 +110,6 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
         logger.info("Signaling trainer that orchestrator setup is complete")
         setup_queue.put("ready")
 
-    # Optionally, run evals on base model (only if starting from scratch)
-    if config.eval and not config.ckpt.resume_step:
-        logger.info("Running evals on base model")
-        for benchmark in config.eval.benchmarks:
-            await run_benchmark(client, benchmark, config.model, config.sampling, step=0, use_tqdm=True)
-
     # Load dataset
     # TODO: Change to verifiers environment
     dataset: Dataset = load_dataset(config.data.name, split=config.data.split)
@@ -190,14 +184,17 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
             logger.debug(f"Reloaded weights in {reload_weights_time:.2f}s")
 
         # Optionally, run online evals at the specified interval
+        time_eval = 0
         if (
             config.eval
-            and config.eval.online
-            and ckpt_step % config.eval.online.interval == 0
+            and config.eval.interval
+            and ckpt_step % config.eval.interval == 0
             and ckpt_step > last_eval_step
+            and (ckpt_step == 0 and config.eval.eval_base_model or ckpt_step > 0)
         ):
             last_eval_step = ckpt_step
             logger.info(f"Running evals for checkpoint step {ckpt_step}")
+            time_before_evals = time.time()
             for benchmark in config.eval.benchmarks:
                 await run_benchmark(
                     client,
@@ -205,7 +202,10 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
                     config.model,
                     config.sampling,
                     ckpt_step,
+                    monitor=monitor,
                 )
+            time_eval = time.time() - time_before_evals
+            logger.info(f"Evaluated in {time_eval:.2f}s")
 
         # Get the completions for the batch
         # TODO: Integrate with async (multi-turn) rollout function from verifiers
@@ -324,6 +324,7 @@ async def orchestrate(config: OrchestratorConfig, setup_queue: Queue | None = No
             "time/orchestrator/compute_rewards": compute_rewards_time,
             "time/orchestrator/reload_weights": reload_weights_time,
             "time/orchestrator/save_ckpt": save_ckpt_time,
+            "time/orchestrator/eval": time_eval,
             "step": progress.step,
         }
         monitor.log(time_metrics)

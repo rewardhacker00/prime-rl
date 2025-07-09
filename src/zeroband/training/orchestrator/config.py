@@ -149,30 +149,17 @@ class DataConfig(BaseConfig):
     ] = None
 
 
-class OnlineEvalConfig(BaseConfig):
-    """Configures online evaluation."""
+class PathConfig(BaseConfig):
+    """Configures a path used for input/ output operations"""
 
-    ckpt_path: Annotated[
-        Path,
-        Field(
-            description="Path to read checkpoints from when doing online evaluation. Expects subdirectories named 'step_x' within the directory.",
-        ),
-    ] = Path("checkpoints")
+    path: Annotated[Path, Field(description="Path to write to.")]
 
-    interval: Annotated[
-        int,
+    clean: Annotated[
+        bool,
         Field(
-            ge=0,
-            description="Interval at which to evaluate the model.",
+            description="Whether to clean the path at the beginning of the run. If True, will delete the entire directory.",
         ),
-    ] = 100
-
-    max_steps: Annotated[
-        int | None,
-        Field(
-            description="Maximum number of steps to run online evaluation for. If None, will run indefinitely.",
-        ),
-    ] = None
+    ] = False
 
 
 class EvalConfig(BaseConfig):
@@ -185,7 +172,20 @@ class EvalConfig(BaseConfig):
         ),
     ] = ["math500"]
 
-    online: Annotated[OnlineEvalConfig | None, Field(description="Whether to do online evaluation.")] = None
+    interval: Annotated[
+        int,
+        Field(
+            ge=0,
+            description="Interval at which to evaluate the model.",
+        ),
+    ] = 100
+
+    eval_base_model: Annotated[
+        bool,
+        Field(
+            description="Whether to evaluate the base model we are training on.",
+        ),
+    ] = False
 
 
 class CheckpointConfig(BaseConfig):
