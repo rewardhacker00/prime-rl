@@ -41,12 +41,7 @@ async def run_server(args: Namespace) -> None:
     sock = create_server_socket(sock_addr)
     app = build_app(args)
 
-    # Inject a custom endpoint
-    @app.get("/test_rpc")
-    async def _test_rpc(request: Request):
-        await engine.collective_rpc("test_rpc")
-        return {"status": "ok"}
-
+    # Inject custom endpoint
     @app.post("/reload_weights")
     async def _reload_weights(request: Request):
         data = await request.json()
