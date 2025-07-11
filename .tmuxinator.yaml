@@ -10,14 +10,14 @@ windows:
           - |
             while true; do
               echo "Waiting for orchestrator log file..."
-              while [ ! -f logs/orchestrator.log ]; do sleep 1; done
-              echo "Following orchestrator.log..."
+              while [ ! -f logs/orchestrator.loguru ]; do sleep 1; done
+              echo "Following orchestrator.loguru..."
               tail -F logs/orchestrator.loguru
             done
         - Inference:
           - |
             while true; do
-              echo "Waiting for trainer log file..."
+              echo "Waiting for inference log file..."
               while [ ! -f logs/inference.log ]; do sleep 1; done
               echo "Following inference.log..."
               tail -F logs/inference.log
