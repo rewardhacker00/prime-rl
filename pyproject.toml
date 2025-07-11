@@ -30,6 +30,7 @@ dependencies = [
     "lovely-tensors>=0.1.18",
     "rich>=14.0.0",
     "tomli-w",
+    "verifiers",
 ]
 
 [project.scripts]
@@ -54,6 +55,7 @@ no-build-isolation-package = ["flash-attn"]
 torch = [{ index = "pytorch-cu128" }]
 pyext = { git = "git+https://github.com/justusmattern27/PyExt.git" }
 reasoning_gym = { git = " git+https://github.com/open-thought/reasoning-gym.git" }
+verifiers = { git = "https://github.com/willccbb/verifiers", rev = "8363357" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"

@@ -1,5 +1,0 @@
-toml_files = ["simple_math.toml"]
-
-[model]
-name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
-ac = true

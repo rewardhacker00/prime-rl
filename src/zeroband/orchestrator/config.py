@@ -29,14 +29,6 @@ class ClientConfig(BaseConfig):
 class SamplingConfig(BaseConfig):
     """Configures how tokens are sampled from the model. Largely follows the vLLM sampling parameters (https://docs.vllm.ai/en/latest/api/vllm.sampling_params.html)."""
 
-    n: Annotated[
-        int,
-        Field(
-            ge=1,
-            description="Number of output sequences to return for the given prompt.",
-        ),
-    ] = 1
-
     temperature: Annotated[
         float,
         Field(
@@ -70,17 +62,10 @@ class SamplingConfig(BaseConfig):
         ),
     ] = 0.0
 
-    max_seq_len: Annotated[
-        int | None,
-        Field(
-            description="Maximum number of input and output tokens allowed before aborting a generation. If set, it will dynamically override the `max_tokens` sampling arg based on the number of input tokens of the particular request. The argument is comparable to the `max_model_len` server parameter in vLLM, but moved to the client to allow for dynamic model contexts.",
-        ),
-    ] = None
-
     max_tokens: Annotated[
         int | None,
         Field(
-            description="Maximum number of output tokens to generate per sequence. If None, will generate until maximum context length or EOS token is hit.",
+            description="Maximum number of output tokens to generate per turn. If None, will generate until maximum context length or EOS token is hit.",
         ),
     ] = None
 
@@ -100,53 +85,11 @@ class SamplingConfig(BaseConfig):
     ] = None
 
 
-class DifficultyFilteringConfig(BaseConfig):
-    """Configures difficulty filtering for the dataset."""
+class EnvironmentConfig(BaseConfig):
+    """Configures the environment to be used for inference."""
 
-    min_solve_rate: Annotated[
-        float,
-        Field(
-            ge=0,
-            le=1,
-            description="Minimum solve rate for samples to be included.",
-        ),
-    ] = 0.0
-
-    max_solve_rate: Annotated[
-        float,
-        Field(
-            ge=0,
-            le=1,
-            description="Maximum solve rate for samples to be included.",
-        ),
-    ] = 1.0
-
-    solve_rate_field: Annotated[
-        str,
-        Field(
-            description="Field name in the dataset that contains the solve rate.",
-        ),
-    ] = "solve_rate"
-
-
-class DataConfig(BaseConfig):
-    """Configures the data to be used for inference."""
-
-    name: Annotated[
-        str,
-        Field(
-            description="Name of the HF dataset to use.",
-        ),
-    ] = "PrimeIntellect/INTELLECT-2-RL-Dataset"
-
-    split: Annotated[str, Field(description="Split of the dataset to use.")] = "train"
-
-    difficulty_filtering: Annotated[
-        DifficultyFilteringConfig | None,
-        Field(
-            description="Optional difficulty filtering configuration. If None, no filtering is applied.",
-        ),
-    ] = None
+    id: Annotated[str, Field(description="ID of the environment to use.")] = "reverse-text"
+    args: Annotated[dict, Field(description="Arguments to pass to the environment.")] = {}
 
 
 class PathConfig(BaseConfig):
@@ -216,8 +159,8 @@ class OrchestratorConfig(BaseSettings):
     # The sampling configuration
     sampling: SamplingConfig = SamplingConfig()
 
-    # The data configuration
-    data: DataConfig = DataConfig()
+    # The environment configuration
+    environment: EnvironmentConfig = EnvironmentConfig()
 
     # The evaluation configuration
     eval: EvalConfig | None = None
@@ -243,12 +186,34 @@ class OrchestratorConfig(BaseSettings):
         ),
     ] = 128
 
+    rollouts_per_prompt: Annotated[
+        int,
+        Field(
+            ge=1,
+            description="Number of output sequences to return for the given prompt.",
+        ),
+    ] = 1
+
     seq_len: Annotated[
         int,
         Field(
             description="Sequence length to use for training. If a sample is shorter than this, it will be padded. If a sequence is longer than this, it will be truncated.",
         ),
     ] = 2048
+
+    mask_truncated_completions: Annotated[
+        bool,
+        Field(
+            description="Whether to mask truncated completions from the loss.",
+        ),
+    ] = True
+
+    mask_env_responses: Annotated[
+        bool,
+        Field(
+            description="Whether to mask environment responses from the loss.",
+        ),
+    ] = True
 
     # TODO(Mika): This should be automatic from the number of ZMQ connections
     num_train_workers: Annotated[
@@ -296,7 +261,7 @@ class OrchestratorConfig(BaseSettings):
 
     @model_validator(mode="after")
     def validate_batch_size(self):
-        if self.batch_size % self.sampling.n != 0:
+        if self.batch_size % self.rollouts_per_prompt != 0:
             raise ValueError("Batch size must be divisible by the number of samples per problem")
         if self.batch_size % self.micro_batch_size != 0:
             raise ValueError("Batch size must be divisible by micro batch size")

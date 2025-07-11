@@ -74,6 +74,7 @@ uv run trainer @ configs/trainer/debug.toml
 ```bash
 uv run inference @ configs/inference/debug.toml
 ```
+
 ```bash
 uv run orchestrator @ configs/orchestrator/debug.toml
 ```
@@ -92,7 +93,7 @@ uv run rl \
 
 ## Entrypoints
 
-We provide a convenience endpoint `rl` for single-node RL experiments. It configures and startsthe trainer, orchestrator and, optionally, an inference server. It enforces correctly setting shared configs (e.g. the model name or async level should be the same across all modules) and dispatches and monitors subprocesses. To stream the logs from each module, we use file logging which can be automatically viewed from a `tmux` layout defined in `.tmuxinator.yaml`. The recommended workflow is:
+We provide a convenience endpoint `rl` for single-node RL experiments. It configures and starts the trainer, orchestrator and, optionally, an inference server. It enforces correctly setting shared configs (e.g. the model name or async level should be the same across all modules) and dispatches and monitors subprocesses. To stream the logs from each module, we use file logging which can be automatically viewed from a `tmux` layout defined in `.tmuxinator.yaml`. The recommended workflow is:
 
 1. Start a pre-layouted `tmux` session using `tmuxinator`
 
@@ -106,7 +107,7 @@ tmuxinator
 uv run inference @ configs/inference/reverse_text.toml
 ```
 
-3. Start the trainer and orcheestrator in the `RL` pane.
+3. Start the trainer and orchestrator in the `RL` pane.
 
 ```bash
 uv run rl \
@@ -130,21 +131,40 @@ uv run rl \
 
 *With two small GPUs (e.g. RTX 3090/ 4090), this experiment should finish in less than 5 minutes.*
 
-**Simple Math**
+**Hendrycks Math**
 
-Train a small model (`deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B`) on high-school level math questions. It is recommended to have at least 2xA100-80GB GPUs or more for this experiment.
+Train a small model (`willcb/DeepSeek-R1-Distill-Qwen-1.5B`) on high-school level math questions. It is recommended to have at least 2xA100-80GB GPUs or more for this experiment.
 
 On two GPUs, run the following command to run the experiment.
 
 ```bash
 uv run rl \
-  --trainer @ configs/trainer/simple_math.toml \
-  --orchestrator @ configs/orchestrator/simple_math.toml \
-  --inference @ configs/inference/simple_math.toml \
+  --trainer @ configs/trainer/hendrycks_math/1b.toml \
+  --orchestrator @ configs/orchestrator/hendrycks_math/1b.toml \
+  --inference @ configs/inference/hendrycks_math/1b.toml \
   --inference.parallel.dp 1
 ```
 
-*NB: If you have more GPUs available, the best way to speed up the run is to increase the DP size of the inference worker, i.e. adjusting the `--parallel.dp` argument. The default config is designed for a 8 GPU setup*
+**INTELLECT-2 Math**
+
+Train a small model (`willcb/DeepSeek-R1-Distill-Qwen-1.5B`) on complex math questions from the INTELLECT-2 dataset.
+
+```bash
+uv run rl \
+  --trainer @ configs/trainer/intellect_math/1b.toml \
+  --orchestrator @ configs/orchestrator/intellect_math/1b.toml \
+  --inference @ configs/inference/intellect_math/1b.toml \
+  --trainer-gpus 2 --inference-gpus 6
+```
+
+*NB: This setup requires 8 GPUs - 2 are used for the FSDP trainer, 6 are used for inference with TP=2 and DP=3.*
+
+
+Note: you may need to increase the number of open files limit to 32000 if you encounter errors like `Too many open files`.
+
+```bash
+ulimit -n 32000
+```
 
 ### Evals
 

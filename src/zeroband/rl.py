@@ -4,12 +4,12 @@ import subprocess
 import sys
 import time
 import warnings
-from itertools import chain
 from pathlib import Path
 from subprocess import Popen
 from threading import Event, Thread
 from typing import Annotated
 
+import tomli_w
 import torch
 from loguru import logger as loguru_logger
 from loguru._logger import Logger
@@ -20,7 +20,7 @@ from zeroband.orchestrator.config import OrchestratorConfig
 from zeroband.trainer.config import CheckpointConfig, TrainerConfig
 from zeroband.utils.config import WandbMonitorConfig
 from zeroband.utils.logger import format_message, format_time, get_logger, set_logger, setup_handlers
-from zeroband.utils.pydantic_config import BaseSettings, parse_argv
+from zeroband.utils.pydantic_config import BaseSettings, get_temp_toml_file, parse_argv
 
 
 class LogConfig(BaseSettings):
@@ -52,7 +52,7 @@ class RLConfig(BaseSettings):
 
     log: LogConfig = LogConfig()
 
-    train_gpus: Annotated[int, Field(description="The number of GPUs to use for training.")] = 1
+    trainer_gpus: Annotated[int, Field(description="The number of GPUs to use for trainer.")] = 1
     inference_gpus: Annotated[int, Field(description="The number of GPUs to use for inference.")] = 1
 
     clean: Annotated[
@@ -65,9 +65,9 @@ class RLConfig(BaseSettings):
     @model_validator(mode="after")
     def validate_device(self):
         available_gpus = torch.cuda.device_count()
-        if self.train_gpus + self.inference_gpus > available_gpus:
+        if self.trainer_gpus + self.inference_gpus > available_gpus:
             raise ValueError(
-                f"Total number of GPUs ({self.train_gpus + self.inference_gpus}) exceeds available GPUs ({available_gpus})"
+                f"Total number of GPUs ({self.trainer_gpus + self.inference_gpus}) exceeds available GPUs ({available_gpus})"
             )
         if self.inference and self.inference_gpus != self.inference.parallel.dp * self.inference.parallel.tp:
             raise ValueError(
@@ -98,7 +98,7 @@ class RLConfig(BaseSettings):
             if self.trainer.monitor.wandb.group:
                 self.orchestrator.monitor.wandb.group = self.trainer.monitor.wandb.group
 
-                self.trainer.monitor.wandb.name = f"{self.trainer.monitor.wandb.group}-train"
+                self.trainer.monitor.wandb.name = f"{self.trainer.monitor.wandb.group}-trainer"
                 self.orchestrator.monitor.wandb.name = f"{self.trainer.monitor.wandb.group}-orchestrator"
         return self
 
@@ -209,19 +209,6 @@ def monitor_process(process: Popen, stop_event: Event, error_queue: list, proces
         stop_event.set()
 
 
-def to_cli(prefix, d):
-    for k, v in d.items():
-        path = f"{prefix}.{k}" if prefix else k
-        if isinstance(v, dict):
-            yield from to_cli(path, v)
-        else:
-            if isinstance(v, bool):
-                if v:
-                    yield (f"--{path}",)
-            else:
-                yield f"--{path}", str(v)
-
-
 def rl(config: RLConfig):
     # Setup logger
     logger = setup_logger(config.log)
@@ -257,14 +244,16 @@ def rl(config: RLConfig):
     monitor_threads: list[Thread] = []
     error_queue: list[Exception] = []
     stop_events: dict[str, Event] = {}
-    all_gpus = list(range(config.train_gpus + config.inference_gpus))
+    all_gpus = list(range(config.trainer_gpus + config.inference_gpus))
 
     try:
         # Optionally, start inference process
         if config.inference:
-            logger.info("Starting inference process")
-            inference_args = list(chain.from_iterable(to_cli("", config.inference.model_dump())))
-            inference_cmd = ["uv", "run", "inference", *inference_args]
+            inference_file = get_temp_toml_file()
+            with open(inference_file, "wb") as f:
+                tomli_w.dump(config.inference.model_dump(exclude_none=True, mode="json"), f)
+
+            inference_cmd = ["uv", "run", "inference", "@", inference_file.as_posix()]
             inference_gpu_ids = all_gpus[: config.inference_gpus]
             logger.info(f"Starting inference process on GPUs {' '.join(map(str, inference_gpu_ids))}")
             logger.debug(f"Inference start command: {' '.join(inference_cmd)}")
@@ -294,12 +283,16 @@ def rl(config: RLConfig):
             )
 
         # Start orchestrator process
-        orchestrator_args = list(chain.from_iterable(to_cli("", config.orchestrator.model_dump())))
+        orchestrator_file = get_temp_toml_file()
+        with open(orchestrator_file, "wb") as f:
+            tomli_w.dump(config.orchestrator.model_dump(exclude_none=True, mode="json"), f)
+
         orchestrator_cmd = [
             "uv",
             "run",
             "orchestrator",
-            *orchestrator_args,
+            "@",
+            orchestrator_file.as_posix(),
         ]
         logger.info("Starting orchestrator process")
         logger.debug(f"Orchestrator start command: {' '.join(orchestrator_cmd)}")
@@ -323,33 +316,37 @@ def rl(config: RLConfig):
         monitor_threads.append(monitor_thread)
 
         # Start training process
-        train_args = list(chain.from_iterable(to_cli("", config.trainer.model_dump())))
-        training_cmd = [
+        trainer_file = get_temp_toml_file()
+        with open(trainer_file, "wb") as f:
+            tomli_w.dump(config.trainer.model_dump(exclude_none=True, mode="json"), f)
+
+        trainer_cmd = [
             "uv",
             "run",
             "torchrun",
             "--nproc-per-node",
-            str(config.train_gpus),
+            str(config.trainer_gpus),
             "src/zeroband/trainer/train.py",
-            *train_args,
+            "@",
+            trainer_file.as_posix(),
         ]
         train_gpu_ids = all_gpus[config.inference_gpus :]
-        logger.info(f"Starting training process on GPUs {' '.join(map(str, train_gpu_ids))}")
-        logger.debug(f"Training start command: {' '.join(training_cmd)}")
-        with open(config.log.path.parent / "training.stdout", "w") as log_file:
-            training_process = Popen(
-                training_cmd,
+        logger.info(f"Starting trainer process on GPUs {' '.join(map(str, train_gpu_ids))}")
+        logger.debug(f"Training start command: {' '.join(trainer_cmd)}")
+        with open(config.log.path.parent / "trainer.stdout", "w") as log_file:
+            trainer_process = Popen(
+                trainer_cmd,
                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, train_gpu_ids))},
-                stdout=log_file,  # Stream trainer logs to RL
+                stdout=None,
                 stderr=log_file,
             )
-        processes.append(training_process)
+        processes.append(trainer_process)
 
         # Start monitoring thread
         stop_event = Event()
-        stop_events["training"] = stop_event
+        stop_events["trainer"] = stop_event
         monitor_thread = Thread(
-            target=monitor_process, args=(training_process, stop_event, error_queue, "training"), daemon=True
+            target=monitor_process, args=(trainer_process, stop_event, error_queue, "trainer"), daemon=True
         )
         monitor_thread.start()
         monitor_threads.append(monitor_thread)
@@ -359,7 +356,7 @@ def rl(config: RLConfig):
         Popen(["tail", "-F", "logs/trainer.log"])
 
         # Check for errors from monitor threads
-        while not (stop_events["orchestrator"].is_set() and stop_events["training"].is_set()):
+        while not (stop_events["orchestrator"].is_set() and stop_events["trainer"].is_set()):
             if error_queue:
                 error = error_queue[0]
                 logger.error(f"Error: {error}")

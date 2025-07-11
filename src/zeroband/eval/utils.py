@@ -11,7 +11,7 @@ from zeroband.eval.registry import (
     get_benchmark_dataset,
     get_benchmark_display_name,
 )
-from zeroband.orchestrator.client import generate_completion, tokenize
+from zeroband.orchestrator.client import generate_completion
 from zeroband.orchestrator.config import ModelConfig, SamplingConfig
 from zeroband.orchestrator.utils import compute_rewards, parse_completions
 from zeroband.utils.logger import get_logger
@@ -57,8 +57,8 @@ async def run_benchmark(
         )
 
     # Format prompts
-    prompts = [item["prompt"] for item in dataset] * sampling_config.n
-    problem_ids = list(range(len(dataset))) * sampling_config.n
+    prompts = [item["prompt"] for item in dataset]  # TODO: Multiply by samples_per_prompt
+    problem_ids = list(range(len(dataset)))  # TODO: Multiply by samples_per_prompt
     batch_messages = [[{"role": "user", "content": prompt}] for prompt in prompts]
     load_data_time = time.time() - load_data_start_time
     logger.debug(f"Loaded dataset in {load_data_time:.2f}s")
@@ -66,12 +66,8 @@ async def run_benchmark(
     # Generate completions
     logger.debug(f"Generating completions for {len(dataset)} problems")
     generate_completions_start_time = time.time()
-    input_tokens = [await tokenize(client, model_config, messages) for messages in batch_messages]
     chat_completions = await asyncio.gather(
-        *(
-            generate_completion(client, model_config, sampling_config, messages, len(input_tokens))
-            for messages, input_tokens in zip(batch_messages, input_tokens)
-        )
+        *(generate_completion(client, model_config, sampling_config, messages) for messages in batch_messages)
     )
     generate_completions_time = time.time() - generate_completions_start_time
     logger.debug(f"Generated completions in {generate_completions_time:.2f}s")

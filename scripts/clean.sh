@@ -11,5 +11,5 @@ log_info() {
 }
 
 # Remove logs, checkpoints, weights, rollouts
-rm -rf logs checkpoints weights rollouts
+rm -rf logs checkpoints weights rollouts .pydantic_config
 log_info "Cleaned up!"

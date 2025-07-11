@@ -7,38 +7,79 @@ from openai.types.chat import ChatCompletion
 from rich.console import Console
 from rich.table import Table
 
+from zeroband.orchestrator.client import tokenize
 from zeroband.orchestrator.genesys import TaskType, get_reward_function
 from zeroband.utils.utils import format_num, format_time, get_weight_ckpt_model_path, wait_for_path
 
 
-def parse_logprobs(chat_completions: list[ChatCompletion]) -> list[list[float]]:
-    """Parses the logprobs from a list of chat completions returned by vLLM OAI server."""
-    logprobs = []
-    for chat_completion in chat_completions:
-        assert len(chat_completion.choices) == 1, "Response should always have one choice"
-        assert chat_completion.choices[0].logprobs is not None, (
-            "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
-        )
-        assert chat_completion.choices[0].logprobs.content is not None, (
-            "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
-        )
-        logprobs.append([logprob.logprob for logprob in chat_completion.choices[0].logprobs.content])
+def parse_completion_logprobs(chat_completion: ChatCompletion) -> list[float]:
+    """Parses the completion logprobs from a vLLM chat completion"""
+    assert len(chat_completion.choices) == 1, "Response should always have one choice"
+    assert chat_completion.choices[0].logprobs is not None, (
+        "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+    )
+    assert chat_completion.choices[0].logprobs.content is not None, (
+        "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+    )
+    logprobs = [logprob.logprob for logprob in chat_completion.choices[0].logprobs.content]
     return logprobs
 
 
-def parse_output_tokens(chat_completions: list[ChatCompletion]) -> list[list[int]]:
+def parse_completion_tokens(chat_completion: ChatCompletion) -> list[int]:
     """Parses the output token ids from a list of chat completions returned by vLLM OAI server."""
-    tokens = []
-    for chat_completion in chat_completions:
-        assert len(chat_completion.choices) == 1, "Response should always have one choice"
-        assert chat_completion.choices[0].logprobs is not None, (
-            "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
-        )
-        assert chat_completion.choices[0].logprobs.content is not None, (
-            "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
-        )
-        tokens.append([int(token.token.split(":")[-1]) for token in chat_completion.choices[0].logprobs.content])
+    assert len(chat_completion.choices) == 1, "Response should always have one choice"
+    assert chat_completion.choices[0].logprobs is not None, (
+        "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+    )
+    assert chat_completion.choices[0].logprobs.content is not None, (
+        "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+    )
+    tokens = [int(token.token.split(":")[-1]) for token in chat_completion.choices[0].logprobs.content]
     return tokens
+
+
+async def process_env_results(outputs, client, config):
+    """Hotfix `process_env_results` for using vLLM prompt and completion tokens/ logprobs"""
+
+    all_prompt_tokens = []
+    all_completion_tokens = []
+    all_completion_logprobs = []
+    prompt_masks = []
+    completion_masks = []
+
+    assert all(len(s["responses"]) == 1 for s in outputs["state"])
+    chat_completions = [s["responses"][0] for s in outputs["state"]]
+    for prompt, chat_completion in zip(outputs["prompt"], chat_completions):
+        # Tokenize prompt using vLLM server
+        prompt_tokens = await tokenize(client, config.model, prompt)
+
+        # Parse vLLM output tokens and logprobs
+        completion_tokens = parse_completion_tokens(chat_completion)
+        completion_logprobs = parse_completion_logprobs(chat_completion)
+
+        # Truncate sequences
+        if len(prompt_tokens) + len(completion_tokens) > config.seq_len:
+            if len(prompt_tokens) > config.seq_len:
+                prompt_tokens = prompt_tokens[: config.seq_len]
+            completion_tokens = completion_tokens[: config.seq_len - len(prompt_tokens)]
+            completion_logprobs = completion_logprobs[: config.seq_len - len(prompt_tokens)]
+
+        prompt_mask = [0] * len(prompt_tokens)
+        completion_mask = [1] * len(completion_tokens)
+
+        all_prompt_tokens.append(prompt_tokens)
+        all_completion_tokens.append(completion_tokens)
+        all_completion_logprobs.append(completion_logprobs)
+        prompt_masks.append(prompt_mask)
+        completion_masks.append(completion_mask)
+
+    return {
+        "prompt_tokens": all_prompt_tokens,
+        "completion_tokens": all_completion_tokens,
+        "completion_logprobs": all_completion_logprobs,
+        "prompt_masks": prompt_masks,
+        "completion_masks": completion_masks,
+    }
 
 
 def parse_completions(chat_completions: list[ChatCompletion]) -> list[str]:

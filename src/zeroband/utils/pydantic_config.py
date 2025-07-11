@@ -97,13 +97,6 @@ class BaseSettings(PydanticBaseSettings, BaseConfig):
     )
 
 
-def get_temp_toml_file():
-    temp_uuid = str(uuid.uuid4())
-    root_path = Path(".pydantic_config")
-    root_path.mkdir(exist_ok=True)
-    return root_path / f"temp_{temp_uuid}.toml"
-
-
 def check_path_and_handle_inheritance(path: Path, seen_files: list[Path], nested_key: str | None) -> bool | None:
     """
     Recursively look for inheritance in a toml file. Return a list of all toml files to load.
@@ -278,3 +271,10 @@ def parse_argv(config_cls: Type[T], allow_extras: bool = False) -> T:
     if allow_extras:
         config.set_unknown_args(unknown_args)
     return config
+
+
+def get_temp_toml_file() -> Path:
+    temp_uuid = str(uuid.uuid4())
+    root_path = Path(".pydantic_config")
+    root_path.mkdir(exist_ok=True)
+    return root_path / f"temp_{temp_uuid}.toml"

@@ -2,22 +2,22 @@ import os
 
 import pytest
 
-from zeroband.trainer import envs as training_env
+from zeroband.trainer import envs
 
 
 def test_training_env_defaults():
     """Test default values for training environment variables"""
-    assert training_env.SHARDCAST_OUTPUT_DIR is None
+    assert envs.SHARDCAST_OUTPUT_DIR is None
 
 
 def test_training_env_custom_values():
     """Test custom values for training environment variables"""
     os.environ.update({"SHARDCAST_OUTPUT_DIR": "path/to/dir"})
 
-    assert training_env.SHARDCAST_OUTPUT_DIR == "path/to/dir"
+    assert envs.SHARDCAST_OUTPUT_DIR == "path/to/dir"
 
 
 def test_invalid_env_vars():
     """Test that accessing invalid environment variables raises AttributeError"""
     with pytest.raises(AttributeError):
-        training_env.INVALID_VAR
+        envs.INVALID_VAR
