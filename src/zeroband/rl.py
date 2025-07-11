@@ -199,9 +199,9 @@ def monitor_process(process: Popen, stop_event: Event, error_queue: list, proces
         process.wait()
 
         if process.returncode != 0:
-            err_msg = f"{process_name} process failed with exit code {process.returncode}"
+            err_msg = f"{process_name.capitalize()} failed with exit code {process.returncode}"
             if process.stderr:
-                err_msg += f"\nStderr: {process.stderr.read().decode('utf-8')}"
+                err_msg += f"\n{process.stderr.read().decode('utf-8')}"
             error_queue.append(RuntimeError(err_msg))
         stop_event.set()
     except Exception as e:
@@ -232,12 +232,9 @@ def rl(config: RLConfig):
         logger.info("Cleaning checkpoint, logs, checkpoint weights and rollout directories")
 
         # Cleaning logs
-        logger.info(f"Cleaning RL logs ({config.log.path})")
-        shutil.rmtree(config.log.path, ignore_errors=True)
-        logger.info(f"Cleaning trainer logs ({config.trainer.log.path})")
-        shutil.rmtree(config.trainer.log.path, ignore_errors=True)
-        logger.info(f"Cleaning orchestrator logs ({config.orchestrator.log.path})")
-        shutil.rmtree(config.orchestrator.log.path, ignore_errors=True)
+        logger.info(f"Cleaning logs ({config.log.path})")
+        for log_file in config.log.path.glob("*.log|*.stdout"):
+            log_file.unlink(missing_ok=True)
 
         # Cleaning checkpoints
         if config.trainer.ckpt and not config.trainer.ckpt.resume_step:  # Only clean if we don't resume
@@ -272,15 +269,12 @@ def rl(config: RLConfig):
             logger.info(f"Starting inference process on GPUs {' '.join(map(str, inference_gpu_ids))}")
             logger.debug(f"Inference start command: {' '.join(inference_cmd)}")
             # If we don't log stdout, the server hangs
-            with (
-                open(config.log.path.parent / "inference.stdout", "w") as stdout_file,
-                open(config.log.path.parent / "inference.stderr", "w") as stderr_file,
-            ):
+            with open(config.log.path.parent / "inference.stdout", "w") as log_file:
                 inference_process = Popen(
                     inference_cmd,
                     env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, inference_gpu_ids))},
-                    stdout=stdout_file,
-                    stderr=stderr_file,
+                    stdout=log_file,
+                    stderr=log_file,
                 )
             processes.append(inference_process)
 
@@ -309,14 +303,11 @@ def rl(config: RLConfig):
         ]
         logger.info("Starting orchestrator process")
         logger.debug(f"Orchestrator start command: {' '.join(orchestrator_cmd)}")
-        with (
-            open(config.log.path.parent / "orchestrator.stdout", "w") as stdout_file,
-            open(config.log.path.parent / "orchestrator.stderr", "w") as stderr_file,
-        ):
+        with open(config.log.path.parent / "orchestrator.stdout", "w") as log_file:
             orchestrator_process = Popen(
                 orchestrator_cmd,
-                stdout=stdout_file,
-                stderr=stderr_file,
+                stdout=log_file,
+                stderr=log_file,
             )
         processes.append(orchestrator_process)
 
@@ -345,14 +336,12 @@ def rl(config: RLConfig):
         train_gpu_ids = all_gpus[config.inference_gpus :]
         logger.info(f"Starting training process on GPUs {' '.join(map(str, train_gpu_ids))}")
         logger.debug(f"Training start command: {' '.join(training_cmd)}")
-        with (
-            open(config.log.path.parent / "training.stderr", "w") as stderr_file,
-        ):
+        with open(config.log.path.parent / "training.stdout", "w") as log_file:
             training_process = Popen(
                 training_cmd,
                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, train_gpu_ids))},
-                stdout=None,  # Stream trainer logs to RL
-                stderr=stderr_file,
+                stdout=log_file,  # Stream trainer logs to RL
+                stderr=log_file,
             )
         processes.append(training_process)
 
@@ -366,14 +355,15 @@ def rl(config: RLConfig):
         monitor_threads.append(monitor_thread)
 
         # Monitor all processes for failures
-        logger.info("Waiting for training to complete...")
+        logger.success("Startup complete. Showing trainer logs...")
+        Popen(["tail", "-F", "logs/trainer.log"])
 
         # Check for errors from monitor threads
         while not (stop_events["orchestrator"].is_set() and stop_events["training"].is_set()):
             if error_queue:
                 error = error_queue[0]
-                logger.error(f"Error in subprocess: {error}")
-                logger.error("One or more processes failed, terminating all processes...")
+                logger.error(f"Error: {error}")
+                logger.error("Terminating all processes...")
                 cleanup_threads(monitor_threads)
                 cleanup_processes(processes)
                 sys.exit(1)

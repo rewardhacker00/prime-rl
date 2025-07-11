@@ -12,7 +12,7 @@ import shardcast
 import torch
 import torch.distributed as dist
 from torch._guards import log as torch_log
-
+from loguru import logger
 from zeroband.trainer.ckpt import CheckpointManager, Progress
 from zeroband.trainer.weights import WeightCheckpointManager
 from zeroband.trainer.config import TrainerConfig
@@ -34,6 +34,7 @@ from zeroband.utils.utils import clean_exit
 
 
 @clean_exit
+@logger.catch(reraise=True)
 def train(config: TrainerConfig):
     # Setup world and logger
     world = get_world()
