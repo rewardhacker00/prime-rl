@@ -337,7 +337,7 @@ def rl(config: RLConfig):
             trainer_process = Popen(
                 trainer_cmd,
                 env={**os.environ, "CUDA_VISIBLE_DEVICES": ",".join(map(str, train_gpu_ids))},
-                stdout=None,
+                stdout=log_file,
                 stderr=log_file,
             )
         processes.append(trainer_process)
