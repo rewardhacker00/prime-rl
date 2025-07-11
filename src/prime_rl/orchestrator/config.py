@@ -174,7 +174,7 @@ class OrchestratorConfig(BaseSettings):
     # The checkpoint configuration
     ckpt: CheckpointConfig | None = None
 
-    collate_mode: Annotated[Literal["packing", "padding"], Field(description="Collate mode to use.")] = "padding"
+    collate_mode: Annotated[Literal["packing", "padding"], Field(description="Collate mode to use.")] = "packing"
 
     batch_size: Annotated[int, Field(ge=1, description="Number of samples to train on per step.")] = 128
 
