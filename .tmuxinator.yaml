@@ -2,29 +2,25 @@ name: rl
 enable_pane_titles: true
 
 windows:
-  - Entrypoint:
+  - RL:
       layout: even-vertical
       panes:
-        - Inference:
-        - RL:
-  - Training:
-      layout: even-vertical
-      panes:
+        - Trainer:
         - Orchestrator:
           - |
             while true; do
               echo "Waiting for orchestrator log file..."
               while [ ! -f logs/orchestrator.log ]; do sleep 1; done
               echo "Following orchestrator.log..."
-              tail -F logs/orchestrator.log
+              tail -F logs/orchestrator.loguru
             done
-        - Trainer:
+        - Inference:
           - |
             while true; do
               echo "Waiting for trainer log file..."
-              while [ ! -f logs/trainer.log ]; do sleep 1; done
-              echo "Following trainer.log..."
-              tail -F logs/trainer.log
+              while [ ! -f logs/inference.log ]; do sleep 1; done
+              echo "Following inference.log..."
+              tail -F logs/inference.log
             done
   - Monitor:
       layout: even-horizontal
