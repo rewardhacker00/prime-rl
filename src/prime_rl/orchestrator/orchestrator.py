@@ -145,7 +145,7 @@ async def orchestrate(config: OrchestratorConfig):
             and config.eval.interval
             and ckpt_step % config.eval.interval == 0
             and ckpt_step > last_eval_step
-            and (ckpt_step == 0 and config.eval.eval_base_model or ckpt_step > 0)
+            and ((ckpt_step == 0 and config.eval.eval_base_model) or ckpt_step > 0)
         ):
             last_eval_step = ckpt_step
             logger.info(f"Running evals for checkpoint step {ckpt_step}")
