@@ -20,9 +20,8 @@ main() {
     log_info "Updating apt..."
     sudo apt update
 
-    log_info "Installing git, tmux, htop, nvtop, cmake, python3-dev, cgroup-tools, gem..."
-    sudo apt install git tmux htop nvtop cmake python3-dev cgroup-tools rubygems -y
-    sudo gem install tmuxinator
+    log_info "Installing git, tmux, htop, nvtop, cmake, python3-dev, cgroup-tools..."
+    sudo apt install git tmux htop nvtop cmake python3-dev cgroup-tools -y
 
     log_info "Cloning repository..."
     git clone git@github.com:PrimeIntellect-ai/prime-rl.git

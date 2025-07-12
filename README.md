@@ -162,15 +162,14 @@ uv run rl \
 *NB: This setup requires 8 GPUs - 2 are used for the FSDP trainer, 6 are used for inference with TP=2 and DP=3.*
 
 
-### Tmuxinator
+### Tmux Layout
 
+We provide a convenient tmux layout script to start a run and view all the logs at the same time. The recommended workflow is:
 
- We also provide a convenient tmuxinator layout to start a run and view all the logs at the same time. The recommended workflow is:
-
-1. Start a pre-layouted `tmux` session using `tmuxinator`
+1. Start a pre-layouted tmux session using the tmux script
 
 ```bash
-tmuxinator
+./tmux.sh
 ```
 
 2. Start the trainer and orchestrator in the `Trainer` pane.
@@ -185,10 +184,10 @@ uv run rl \
 #### Standalone Inference Server
 You can optionally start the inference server individually to avoid the long vllm warmup at each run restart. Useful for development.
 
-1. Start the pre-layouted `tmux` session using `tmuxinator`
+1. Start the pre-layouted tmux session using the tmux script
 
 ```bash
-tmuxinator
+./tmux.sh
 ```
 
 2. Start the inference server in the `Inference` pane.
@@ -203,6 +202,12 @@ uv run inference @ configs/inference/reverse_text.toml
 uv run rl \
   --trainer @ configs/trainer/reverse_text.toml \
   --orchestrator @ configs/orchestrator/reverse_text.toml \
+```
+
+To kill the tmux session when you're done:
+
+```bash
+./tmux.sh kill
 ```
 
 
