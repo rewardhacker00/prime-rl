@@ -7,3 +7,5 @@ ac = true
 
 [optim]
 lr = 1e-6
+
+[ckpt]
