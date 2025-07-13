@@ -295,6 +295,7 @@ async def orchestrate(config: OrchestratorConfig):
             "reward/reward_std": np.std(rewards),
             "reward/advantage": np.mean(advantages),
             "reward/advantage_std": np.std(advantages),
+            "reward/advantage_zero_ratio": np.mean(np.array(advantages) == 0.0),
             "step": progress.step,
         }
         monitor.log(reward_metrics)
