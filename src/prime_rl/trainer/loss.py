@@ -140,8 +140,7 @@ def grpo_loss_ratio(
 
     loss = _apply_mask(per_token_loss, loss_mask, max_tokens)
 
-    with torch.no_grad():
-        ratio_avg = _apply_mask(ratio, loss_mask, max_tokens)
+    ratio_avg = (loss_mask * ratio.detach()).sum() / loss_mask.sum()
 
     return loss, ratio_avg
 
