@@ -94,7 +94,7 @@ class WeightCheckpointConfig(BaseConfig):
         Field(
             description="Whether to save the weights asynchronously.",
         ),
-    ] = False
+    ] = True
 
 
 class BaseGRPOVariantConfig(BaseConfig):
