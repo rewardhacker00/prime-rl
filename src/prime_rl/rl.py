@@ -4,6 +4,7 @@ import subprocess
 import sys
 import time
 import warnings
+from copy import deepcopy
 from pathlib import Path
 from subprocess import Popen
 from threading import Event, Thread
@@ -96,14 +97,6 @@ class RLConfig(BaseSettings):
                 seq_len=self.orchestrator.seq_len,
             )
 
-            # Suffix the W&B project with "-bench"
-            if self.trainer.monitor.wandb:
-                self.trainer.monitor.wandb.project = f"{self.trainer.monitor.wandb.project}-bench"
-
-            # Disable evaluation
-            self.orchestrator.eval = None
-            self.orchestrator.monitor.wandb.log_samples = None
-
         return self
 
     @model_validator(mode="after")
@@ -122,12 +115,11 @@ class RLConfig(BaseSettings):
                 self.orchestrator.monitor.wandb = WandbMonitorConfig()
             self.orchestrator.monitor.wandb.project = self.trainer.monitor.wandb.project
 
-            # If group is set, use it and auto-generate run names
-            if self.trainer.monitor.wandb.group:
-                self.orchestrator.monitor.wandb.group = self.trainer.monitor.wandb.group
-
-                self.trainer.monitor.wandb.name = f"{self.trainer.monitor.wandb.group}-trainer"
-                self.orchestrator.monitor.wandb.name = f"{self.trainer.monitor.wandb.group}-orchestrator"
+            # If name is set on trainer, copy it and add suffixes
+            if self.trainer.monitor.wandb.name:
+                run_name = deepcopy(self.trainer.monitor.wandb.name)
+                self.trainer.monitor.wandb.name = f"{run_name}-trainer"
+                self.orchestrator.monitor.wandb.name = f"{run_name}-orchestrator"
         return self
 
     @model_validator(mode="after")

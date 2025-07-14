@@ -322,7 +322,6 @@ Because we save progress information, resuming from a checkpoint is fully W&B co
 ```bash
 CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/trainer/reverse_text.toml \
   --monitor.wandb.project <project> \
-  --monitor.wandb.group <group> \
   --ckpt.resume-step 10 \
   --monitor.wandb.id <trainer-run-id> \
   --orchestrator.monitor.wandb.id <orchestrator-run-id>
@@ -356,7 +355,7 @@ uv run trainer @ configs/trainer/reverse_text.toml --bench --data.fake "{'micro_
 
 **RL**
 
-Often it will be most convenient to benchmark the full RL run. This will automatically set the training batch configuration to match the way the orchestrator would have written it. Also, if W&B is configured for this project, it will synchronize the benchmark results to the project name, but suffixed with `-bench`.
+Often it will be most convenient to benchmark the full RL run. This will automatically set the training batch configuration to match the way the orchestrator would have written it.
 
 ```bash
 uv run rl   \
