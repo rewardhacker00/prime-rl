@@ -149,7 +149,7 @@ uv run rl \
 
 Train a small model (`willcb/DeepSeek-R1-Distill-Qwen-1.5B`) on high-school level math questions. It is recommended to have at least 2xA100-80GB GPUs or more for this experiment.
 
-On two GPUs, run the following command to run the experiment.
+On eight GPUs, run the following command to run the experiment.
 
 ```bash
 uv run rl \
