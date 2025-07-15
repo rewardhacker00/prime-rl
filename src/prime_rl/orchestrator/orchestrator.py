@@ -175,7 +175,7 @@ async def orchestrate(config: OrchestratorConfig):
         problems_per_batch = config.batch_size // config.rollouts_per_prompt
         start_idx = epoch_step * problems_per_batch
         indices = range(start_idx, start_idx + problems_per_batch)
-        problems = dataset.select(indices).to_list() * config.rollouts_per_prompt
+        problems = [problem for problem in dataset.select(indices).to_list() for _ in range(config.rollouts_per_prompt)]
 
         # prepare inputs for verifiers generation
         inputs = {
