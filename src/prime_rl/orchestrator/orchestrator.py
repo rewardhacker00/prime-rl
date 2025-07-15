@@ -14,7 +14,7 @@ from transformers import AutoTokenizer
 
 from prime_rl.eval.utils import run_benchmark
 from prime_rl.orchestrator.ckpt import CheckpointManager, Progress
-from prime_rl.environments.registry import get_environment
+from prime_rl.environments.registry import load_environment
 from prime_rl.orchestrator.client import (
     check_has_model,
     check_health,
@@ -85,7 +85,7 @@ async def orchestrate(config: OrchestratorConfig):
 
     # Load environment and extract dataset
     logger.info(f"Loading environment {config.environment.id} with args {config.environment.args}")
-    vf_env = get_environment(config.environment.id, config.environment.args)
+    vf_env = load_environment(config.environment.id, config.environment.args)
     dataset = vf_env.get_dataset(seed=config.seed)
 
     # Load tokenizer -- placeholder until reworking verifiers to use vLLM tokenizer
