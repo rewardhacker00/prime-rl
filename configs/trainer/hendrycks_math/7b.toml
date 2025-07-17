@@ -8,3 +8,4 @@ ac = true
 lr = 1e-6
 
 [ckpt]
+interval = 200 

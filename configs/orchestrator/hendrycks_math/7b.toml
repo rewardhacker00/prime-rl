@@ -1,5 +1,5 @@
 batch_size = 512
-micro_batch_size = 4
+micro_batch_size = 2
 rollouts_per_prompt = 16
 seq_len = 2048
 mask_truncated_completions = false
