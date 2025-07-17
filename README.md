@@ -356,8 +356,30 @@ CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/trainer/reverse_text.toml \
   --monitor.wandb.project <project> \
   --ckpt.resume-step 10 \
   --monitor.wandb.id <trainer-run-id> \
-  --orchestrator.monitor.wandb.id <orchestrator-run-id>
 ```
+
+You also need to restart the orchestrator from a checkpoint, the api is the same as the trainer, e.g.
+
+```bash
+uv run orchestrator @ configs/orchestrator/reverse_text.toml \
+  --monitor.wandb.project <project> \
+  --ckpt.resume-step 10 \
+  --monitor.wandb.id <orchestrator-run-id>
+```
+
+If you started your run using the rl.py script, you can resume the same run by passing the same W&B run ID for both the trainer and the orchestrator, e.g.
+
+```bash
+uv run rl \
+  --trainer @ configs/trainer/reverse_text.toml \
+  --trainer.monitor.wandb.id <trainer-run-id> \
+  --trainer.ckpt.resume-step 10 \
+  --orchestrator @ configs/orchestrator/reverse_text.toml \
+  --orchestrator.ckpt.resume-step 10 \
+  --orchestrator.monitor.wandb.id <orchestrator-run-id> 
+```
+
+You don't need to restart the inference server if started manually, the orchestrator will automatically send the right checkpoint to the inference server when resuming.
 
 ### Benchmarking
 
