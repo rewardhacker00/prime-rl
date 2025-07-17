@@ -343,7 +343,7 @@ By default, runs do no write checkpoints to save disk space. To checkpoint every
 CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/trainer/reverse_text.toml --ckpt.interval 10 
 ```
 
-To resume a run use the `--ckpt.resume-step` flag. To resume from the checkpoint stpe 10 from the previous command, run the following command
+To resume a run use the `--ckpt.resume-step` flag. To resume from the checkpoint step 10 from the previous command, run the following command
 
 ```bash
 CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/trainer/reverse_text.toml --ckpt.resume_step 10
