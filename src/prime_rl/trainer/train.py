@@ -189,8 +189,15 @@ def train(config: TrainerConfig):
                     position_ids = micro_batch["position_ids"].to("cuda")
                     temperature = micro_batch["temperature"]
 
-                    logprobs = compute_logprobs(logprob_model, input_ids, position_ids, temperature)
-                    micro_batch["logprobs"] = logprobs.to("cpu")
+                    recomputed_logprobs = compute_logprobs(logprob_model, input_ids, position_ids, temperature)
+                    original_logprobs = micro_batch["logprobs"].to(recomputed_logprobs.device)
+
+                    diff_mask = micro_batch["loss_mask"][:, 1:].to(recomputed_logprobs.device)
+
+                    recomputed_logprob_error = ((torch.exp(recomputed_logprobs - original_logprobs).abs()) * diff_mask).sum()
+
+                    micro_batch["recomputed_logprob_error"] = recomputed_logprob_error.to("cpu")
+                    micro_batch["logprobs"] = recomputed_logprobs.to("cpu")
 
             # here we sepcifically don't save the tensor offloaded, they are alreay consumed and we will never use it again.
             # this avoid having to make sure we don't keep too much tensor offloaded in cpu memory
@@ -226,7 +233,7 @@ def train(config: TrainerConfig):
             logits = forward(model, input_ids, position_ids).contiguous()
 
             # Compute loss
-            loss, importance_ratio = grpo_loss(
+            loss, importance_ratio, clipped_token_count = grpo_loss(
                 logits=logits,
                 input_ids=input_ids,
                 advantages=advantages,
@@ -248,6 +255,10 @@ def train(config: TrainerConfig):
             loss_metrics["loss/loss"] += loss.detach().clone().float()
             loss_metrics["loss/entropy"] += entropy.detach().clone().float()
             loss_metrics["loss/importance_ratio"] += importance_ratio.detach().clone().float()
+            loss_metrics["loss/clipped_ratio"] += clipped_token_count.detach().clone().float()
+
+            recomputed_logprob_error = micro_batch.get("recomputed_logprob_error", torch.tensor(0.0))
+            loss_metrics["loss/recomputed_logprob_error"] += recomputed_logprob_error.clone().float()
 
             # Scale loss by scale factor before backward pass
             loss = loss / loss_scale
@@ -261,7 +272,7 @@ def train(config: TrainerConfig):
             )
 
             del micro_batch, logits, input_ids, position_ids, advantages, logprobs, loss_mask
-            del loss, entropy, importance_ratio
+            del loss, entropy, importance_ratio, clipped_token_count
 
         # Normalize all loss metrics globally before reporting
         for key, value in loss_metrics.items():
@@ -318,15 +329,6 @@ def train(config: TrainerConfig):
         step_time = time.time() - step_start_time
         step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Loss: {loss_metrics['loss/loss']:.2f} | Entropy: {loss_metrics['loss/entropy']:.2f} | Importance Ratio: {loss_metrics['loss/importance_ratio']:.2f} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}%"
         logger.success(step_message)
-
-        # Log progress metrics
-        progress_metrics = {
-            "progress/train/total_tokens": progress.total_tokens,
-            "progress/train/total_samples": progress.total_samples,
-            "progress/train/step": progress.step,  # Shared W&B axis
-            "step": progress.step,
-        }
-        monitor.log(progress_metrics)
 
         # Log performance metrics
         perf_metrics = {

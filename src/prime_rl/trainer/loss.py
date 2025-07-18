@@ -17,7 +17,7 @@ def grpo_loss(
     loss_mask: Int[Tensor, "batch seq"],
     temperature: float,
     grpo_loss_config: GRPOVariantsConfig,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     if isinstance(grpo_loss_config, ClippingConfig):
         return grpo_loss_clip(
             logits=logits,
@@ -58,7 +58,7 @@ def grpo_loss_clip(
     epsilon_high: float,
     clip_ratio: float,
     highest_entropy_percentage: float,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     """
     DeepSeek Math Loss: https://arxiv.org/abs/2402.03300
 
@@ -91,14 +91,14 @@ def grpo_loss_clip(
     per_token_loss = torch.max(per_token_loss1, per_token_loss2)
 
     is_clipped = (per_token_loss1 < per_token_loss2).float()
-    clip_ratio_tensor = _masked_sum(is_clipped, loss_mask)
+    clipped_token_count = _masked_sum(is_clipped, loss_mask)
 
     if highest_entropy_percentage < 1.0:
         loss_mask = highest_entropy_mask(logits, loss_mask, highest_entropy_percentage)
 
     loss = _masked_sum(per_token_loss, loss_mask)
-
-    return loss, clip_ratio_tensor
+    ratio = _masked_sum(coef_2, loss_mask)
+    return loss, ratio, clipped_token_count
 
 
 @jaxtyped(typechecker=typechecker)
@@ -111,7 +111,7 @@ def grpo_loss_ratio(
     temperature: float,
     clip_ratio: float,
     highest_entropy_percentage: float,
-) -> tuple[Tensor, Tensor]:
+) -> tuple[Tensor, Tensor, Tensor]:
     # we start by dropping the bos token because it does not have a corresponding logit
     input_ids = input_ids[:, 1:]
     advantages = advantages[:, 1:]
@@ -125,8 +125,12 @@ def grpo_loss_ratio(
     logits = logits / temperature
     per_token_logps = selective_log_softmax(logits, input_ids)
 
-    ratio = torch.clamp(torch.exp(per_token_logps - original_logprobs), 0, clip_ratio)
+    raw_ratio = torch.exp(per_token_logps - original_logprobs)
 
+    is_clipped = (raw_ratio > clip_ratio).float()
+    clipped_token_count = _masked_sum(is_clipped, loss_mask)
+
+    ratio = torch.clamp(raw_ratio, 0, clip_ratio)
     loss = -ratio * advantages
 
     if highest_entropy_percentage < 1.0:
@@ -135,7 +139,7 @@ def grpo_loss_ratio(
     loss = _masked_sum(loss, loss_mask)
     ratio = _masked_sum(ratio, loss_mask)
 
-    return loss, ratio
+    return loss, ratio, clipped_token_count
 
 
 def selective_log_softmax(logits, index):
