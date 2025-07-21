@@ -1,12 +1,12 @@
-## to run on H100
+## to run on 8H200
 batch_size = 512
-micro_batch_size = 2
+micro_batch_size = 8
 rollouts_per_prompt = 16
 seq_len = 2048
 mask_truncated_completions = false
 
 [model]
-name = "willcb/DeepSeek-R1-Distill-Qwen-7B"
+name = "willcb/DeepSeek-R1-Distill-Qwen-32B"
 
 [monitor.wandb]
 
@@ -20,6 +20,3 @@ num_samples = 16
 [eval]
 interval = 50
 benchmarks = ["math500", "aime24", "aime25"]
-
-[ckpt]
-interval = 200 

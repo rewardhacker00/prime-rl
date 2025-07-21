@@ -1,0 +1,8 @@
+[monitor.wandb]
+
+[model]
+name = "willcb/DeepSeek-R1-Distill-Qwen-14B"
+ac = true
+
+[optim]
+lr = 1e-6
