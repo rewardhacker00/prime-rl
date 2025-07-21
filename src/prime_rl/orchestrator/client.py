@@ -30,7 +30,7 @@ def setup_client(client_config: ClientConfig) -> AsyncOpenAI:
     )
 
 
-async def check_health(client: AsyncOpenAI, interval: int = 1, log_interval: int = 10, timeout: int = 360) -> None:
+async def check_health(client: AsyncOpenAI, interval: int = 1, log_interval: int = 10, timeout: int = 1800) -> None:
     logger = get_logger()
     wait_time = 0
     url = str(client.base_url)[:-4] + "/health"
