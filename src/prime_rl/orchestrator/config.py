@@ -216,17 +216,24 @@ class OrchestratorConfig(BaseSettings):
         ),
     ] = 2048
 
+    mask_env_responses: Annotated[
+        bool,
+        Field(
+            description="Whether to mask environment responses from the loss.",
+        ),
+    ] = True
+
     mask_truncated_completions: Annotated[
         bool,
         Field(
             description="Whether to mask truncated completions from the loss.",
         ),
-    ] = True
+    ] = False
 
-    mask_env_responses: Annotated[
+    zero_truncated_completions: Annotated[
         bool,
         Field(
-            description="Whether to mask environment responses from the loss.",
+            description="Whether to zero-truncate truncated completions from the loss.",
         ),
     ] = True
 
