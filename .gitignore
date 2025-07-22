@@ -18,9 +18,6 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# ???
-core.*
-
 # C extensions
 *.so
 

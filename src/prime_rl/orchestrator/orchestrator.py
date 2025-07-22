@@ -189,7 +189,6 @@ async def orchestrate(config: OrchestratorConfig):
         logger.info(f"Sending {len(problems)} requests to environments")
         generate_completions_start_time = time.time()
         sampling_args = dict(config.sampling)
-
         sampling_args["logprobs"] = True
 
         # sanitize for vLLM OpenAI client
@@ -207,23 +206,13 @@ async def orchestrate(config: OrchestratorConfig):
         generate_completions_time = time.time() - generate_completions_start_time
 
         # TODO: Switch parsing prompt+completion tokens/ masks to vf_env.process_env_results once it supports parsing directly from vLLM. For now, this only works for single-turn output results
-        results = vf_env.process_env_results_vllm(
-            prompts=outputs["prompt"],
-            completions=outputs["completion"],
-            states=outputs["state"],
-            rewards=outputs["reward"],
-            processing_class=tokenizer,
-            max_seq_len=config.seq_len,
-            mask_env_responses=config.mask_env_responses,
-            zero_truncated_completions=config.zero_truncated_completions,
-            mask_truncated_completions=config.mask_truncated_completions,
-        )
-        prompt_tokens = results["prompt_ids"]
-        completion_tokens = results["completion_ids"]
+        results = await process_env_results(outputs, client=client, config=config)
+        prompt_tokens = results["prompt_tokens"]
+        completion_tokens = results["completion_tokens"]
         completion_logprobs = results["completion_logprobs"]
-        prompt_masks = results["prompt_mask"]
-        completion_masks = results["completion_mask"]
-        rewards = outputs["reward"]
+        prompt_masks = results["prompt_masks"]
+        completion_masks = results["completion_masks"]
+        rewards = outputs["reward"]  # TODO: Align naming between prime-rl <> verifiers
 
         advantages, advantage_stats = compute_advantages(
             rewards=rewards, samples_per_problem=config.rollouts_per_prompt, advantage_type=config.advantage_type

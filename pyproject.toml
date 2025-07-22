@@ -29,8 +29,6 @@ dependencies = [
     "rich>=14.0.0",
     "tomli-w",
     "verifiers",
-    "textarena>=0.6.16",
-    "nltk>=3.9.1",
 ]
 
 [project.scripts]
@@ -54,7 +52,7 @@ prerelease = "allow"
 
 [tool.uv.sources]
 torch = [{ index = "pytorch-cu128" }]
-verifiers = { git = "https://github.com/willccbb/verifiers", rev = "c889190" }
+verifiers = { git = "https://github.com/willccbb/verifiers", rev = "784e1ee" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
