@@ -1,4 +1,5 @@
 import argparse
+import os
 
 import numpy as np
 from openai import OpenAI
@@ -19,7 +20,7 @@ if __name__ == "__main__":
     parser.add_argument("--temperature", "-T", type=float, default=0.7)
     args = parser.parse_args()
     vf_env = load_environment(args.env)
-    client = OpenAI()
+    client = OpenAI(api_key=os.getenv(args.api_key_var), base_url=args.api_base_url)
     sampling_args = {
         "max_tokens": args.max_tokens,
         "temperature": args.temperature,
