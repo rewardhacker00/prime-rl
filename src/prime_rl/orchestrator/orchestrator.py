@@ -23,7 +23,8 @@ from prime_rl.orchestrator.client import (
     setup_client,
 )
 from prime_rl.orchestrator.config import OrchestratorConfig
-from prime_rl.orchestrator.data import prepare_batch
+from prime_rl.orchestrator.buffer import setup_buffer, make_rollouts, Rollout
+from prime_rl.orchestrator.batch import prepare_batch
 from prime_rl.orchestrator.logger import setup_logger
 from prime_rl.orchestrator.advantage import compute_advantages
 from prime_rl.orchestrator.utils import (
@@ -88,13 +89,16 @@ async def orchestrate(config: OrchestratorConfig):
     vf_env = load_environment(config.environment.id, config.environment.args)
     dataset = vf_env.get_dataset(seed=config.seed)
 
+    # Setup buffer
+    logger.info(f"Setting up buffer ({config.buffer})")
+    buffer = setup_buffer(dataset, config.buffer)
+
     # Load tokenizer -- placeholder until reworking verifiers to use vLLM tokenizer
     tokenizer = AutoTokenizer.from_pretrained(config.model.name)
 
     # Iterate over dataset in batches
     max_steps = config.max_steps or int(1e9)
-    steps_per_epoch = len(dataset) // (config.batch_size // config.rollouts_per_prompt)
-    logger.info(f"Starting orchestrator loop ({max_steps=}, {steps_per_epoch=})")
+    logger.info(f"Starting orchestrator loop ({max_steps=}")
     ckpt_step = 0
     last_eval_step = -1
     while True:
@@ -110,14 +114,7 @@ async def orchestrate(config: OrchestratorConfig):
         if config.max_steps and progress.step >= config.max_steps:
             break
 
-        # Check if we need to start a new epoch
-        epoch_step = progress.step % steps_per_epoch
-        if epoch_step == 0:
-            progress.epoch += 1
-            # Reshuffle dataset at the beginning of each epoch
-            dataset = dataset.shuffle(seed=(config.seed or 0) + progress.epoch)
-
-        logger.info(f"Starting orchestrator step {progress.step} ({ckpt_step=}, epoch={progress.epoch}, {epoch_step=})")
+        logger.info(f"Starting orchestrator step {progress.step} ({ckpt_step=})")
         step_start_time = time.time()
 
         # Optionally, wait for the next checkpoint to be available
@@ -171,62 +168,87 @@ async def orchestrate(config: OrchestratorConfig):
             time_eval = time.time() - time_before_evals
             logger.info(f"Evaluated in {time_eval:.2f}s")
 
-        # Get the batch
-        problems_per_batch = config.batch_size // config.rollouts_per_prompt
-        start_idx = epoch_step * problems_per_batch
-        indices = range(start_idx, start_idx + problems_per_batch)
-        problems = [problem for problem in dataset.select(indices).to_list() for _ in range(config.rollouts_per_prompt)]
+        accepted_rollouts: list[Rollout] = []
+        while True:
+            # Get the batch
+            problems_per_batch = config.batch_size // config.rollouts_per_prompt
+            problem_ids, problems = buffer.sample_problems(problems_per_batch)
 
-        # prepare inputs for verifiers generation
-        inputs = {
-            "prompt": [problem["prompt"] for problem in problems],
-            "info": [problem.get("info", {}) for problem in problems],
-            "task": [problem["task"] for problem in problems],
-            "answer": [problem.get("answer", "") for problem in problems],
-        }
+            # Duplicate problems `rollouts_per_prompt` times
+            problem_ids = [problem_id for problem_id in problem_ids for _ in range(config.rollouts_per_prompt)]
+            problems = [problem for problem in problems for _ in range(config.rollouts_per_prompt)]
 
-        # generate completions + rewards with verifiers
-        logger.info(f"Sending {len(problems)} requests to environments")
-        generate_completions_start_time = time.time()
-        sampling_args = dict(config.sampling)
+            # Prepare inputs for verifiers generation
+            # TODO: Can we use `prime_rl.utils.utils.to_col_format` here?
+            inputs = {
+                "prompt": [problem["prompt"] for problem in problems],
+                "info": [problem.get("info", {}) for problem in problems],
+                "task": [problem["task"] for problem in problems],
+                "answer": [problem.get("answer", "") for problem in problems],
+            }
 
-        sampling_args["logprobs"] = True
+            # Generate completions + rewards with verifiers
+            logger.info(f"Sending {len(problems)} requests to environments")
+            generate_completions_start_time = time.time()
+            sampling_args = dict(config.sampling)
+            sampling_args["logprobs"] = True
 
-        # sanitize for vLLM OpenAI client
-        sampling_args["extra_body"] = {"return_tokens_as_token_ids": True}
-        if "top_k" in sampling_args:
-            sampling_args["extra_body"]["top_k"] = sampling_args.pop("top_k")
-        if "min_p" in sampling_args:
-            sampling_args["extra_body"]["min_p"] = sampling_args.pop("min_p")
-        if "min_tokens" in sampling_args:
-            sampling_args["extra_body"]["min_tokens"] = sampling_args.pop("min_tokens")
+            # Sanitize for vLLM OpenAI client
+            sampling_args["extra_body"] = {"return_tokens_as_token_ids": True}
+            if "top_k" in sampling_args:
+                sampling_args["extra_body"]["top_k"] = sampling_args.pop("top_k")
+            if "min_p" in sampling_args:
+                sampling_args["extra_body"]["min_p"] = sampling_args.pop("min_p")
+            if "min_tokens" in sampling_args:
+                sampling_args["extra_body"]["min_tokens"] = sampling_args.pop("min_tokens")
 
-        outputs = await vf_env.a_generate(
-            inputs=inputs, client=client, model=config.model.name, sampling_args=sampling_args
-        )
-        generate_completions_time = time.time() - generate_completions_start_time
+            outputs = await vf_env.a_generate(
+                inputs=inputs, client=client, model=config.model.name, sampling_args=sampling_args
+            )
+            generate_completions_time = time.time() - generate_completions_start_time
 
-        results = vf_env.process_env_results_vllm(
-            prompts=outputs["prompt"],
-            completions=outputs["completion"],
-            states=outputs["state"],
-            rewards=outputs["reward"],
-            processing_class=tokenizer,
-            max_seq_len=config.seq_len,
-            mask_env_responses=config.mask_env_responses,
-            zero_truncated_completions=config.zero_truncated_completions,
-            mask_truncated_completions=config.mask_truncated_completions,
-        )
-        prompt_tokens = results["prompt_ids"]
-        completion_tokens = results["completion_ids"]
-        completion_logprobs = results["completion_logprobs"]
-        prompt_masks = results["prompt_mask"]
-        completion_masks = results["completion_mask"]
-        rewards = outputs["reward"]
+            results = vf_env.process_env_results_vllm(
+                prompts=outputs["prompt"],
+                completions=outputs["completion"],
+                states=outputs["state"],
+                rewards=outputs["reward"],
+                processing_class=tokenizer,
+                max_seq_len=config.seq_len,
+                mask_env_responses=config.mask_env_responses,
+                zero_truncated_completions=config.zero_truncated_completions,
+                mask_truncated_completions=config.mask_truncated_completions,
+            )
 
-        advantages, advantage_stats = compute_advantages(
-            rewards=rewards, samples_per_problem=config.rollouts_per_prompt, advantage_type=config.advantage_type
-        )
+            advantages = compute_advantages(
+                rewards=outputs["reward"],
+                samples_per_problem=config.rollouts_per_prompt,
+                advantage_type=config.advantage_type,
+            )
+
+            # Update pool
+            rollouts = make_rollouts(
+                problem_ids=problem_ids,
+                prompt_tokens=results["prompt_ids"],
+                prompt_masks=results["prompt_mask"],
+                completion_tokens=results["completion_ids"],
+                completion_masks=results["completion_mask"],
+                completion_logprobs=results["completion_logprobs"],
+                rewards=outputs["reward"],
+                advantages=advantages,
+            )
+            buffer.update(rollouts)
+            accepted_rollouts.extend(buffer.sample_rollouts(problems_per_batch))
+
+            if len(accepted_rollouts) >= config.batch_size:
+                accepted_rollouts = accepted_rollouts[: config.batch_size]
+                break
+
+        # Unpack accepted rollouts
+        rewards = [rollout.reward for rollout in accepted_rollouts]
+        advantages = [rollout.advantage for rollout in accepted_rollouts]
+        problem_ids = [rollout.problem_id for rollout in accepted_rollouts]
+        prompt_tokens = [rollout.prompt_tokens for rollout in accepted_rollouts]
+        completion_tokens = [rollout.completion_tokens for rollout in accepted_rollouts]
 
         logger.debug(f"Computed rewards: {lt.lovely(torch.tensor(rewards))}")
         logger.debug(f"Computed advantages ({config.advantage_type}): {lt.lovely(torch.tensor(advantages))}")
@@ -243,6 +265,15 @@ async def orchestrate(config: OrchestratorConfig):
 
         seq_lengths = np.array([len(p) + len(c) for p, c in zip(prompt_tokens, completion_tokens)])
         problem_avg_seqlens = seq_lengths.reshape(-1, config.rollouts_per_prompt).mean(axis=-1)
+
+        # Compute solve all/ none and critical batch size
+        grouped_rewards = [
+            rewards[i : i + config.rollouts_per_prompt] for i in range(0, len(rewards), config.rollouts_per_prompt)
+        ]
+        assert len(grouped_rewards) == problems_per_batch
+        solve_all = sum(1 for group in grouped_rewards if all(reward == 1 for reward in group)) / problems_per_batch
+        solve_none = sum(1 for group in grouped_rewards if all(reward == 0 for reward in group)) / problems_per_batch
+        effective_batch_size = 1 - solve_all - solve_none
 
         # Log samples to W&B table if enabled
         if monitor.wandb:
@@ -263,12 +294,7 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Write serialized batch to disk for trainer workers to consume
         all_data_ranks_batches = prepare_batch(
-            prompt_tokens,
-            prompt_masks,
-            completion_tokens,
-            completion_masks,
-            completion_logprobs,
-            advantages,
+            rollouts=rollouts,
             temperature=config.sampling.temperature,
             tokenizer=tokenizer,
             batch_size=config.batch_size,
@@ -297,7 +323,6 @@ async def orchestrate(config: OrchestratorConfig):
             "progress/total_tokens": progress.total_tokens,
             "progress/total_samples": progress.total_samples,
             "progress/total_problems": progress.total_problems,
-            "progress/epoch": progress.epoch,
             "progress/ckpt_step": ckpt_step,  # Shared W&B axis
             "step": progress.step,
         }
@@ -317,9 +342,9 @@ async def orchestrate(config: OrchestratorConfig):
         # Log rewards metrics to monitor
         reward_metrics = {
             "reward/reward": np.mean(rewards),
-            "reward/solve_none": advantage_stats["solve_none"],
-            "reward/solve_all": advantage_stats["solve_all"],
-            "reward/effective_batch_size": advantage_stats["effective_batch_size"],
+            "reward/solve_none": solve_none,
+            "reward/solve_all": solve_all,
+            "reward/effective_batch_size": effective_batch_size,
             "step": progress.step,
         }
         monitor.log(reward_metrics)
