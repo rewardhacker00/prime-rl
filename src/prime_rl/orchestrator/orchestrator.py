@@ -254,6 +254,12 @@ async def orchestrate(config: OrchestratorConfig):
                 rollouts_per_problem=config.rollouts_per_prompt,
                 step=progress.step,
             )
+            monitor.wandb.log_distributions(
+                rewards,
+                advantages,
+                rollouts_per_problem=config.rollouts_per_prompt,
+                step=progress.step,
+            )
 
         # Write serialized batch to disk for trainer workers to consume
         all_data_ranks_batches = prepare_batch(
@@ -332,6 +338,11 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Increment progress
         progress.step += 1
+
+    # Log final (immutable) samples and distributions to W&B table
+    if monitor.wandb:
+        monitor.wandb.log_final_samples()
+        monitor.wandb.log_final_distributions()
 
     logger.success("Orchestrator finished.")
 
