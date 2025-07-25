@@ -123,6 +123,13 @@ class EvalConfig(BaseConfig):
         ),
     ] = ["math500"]
 
+    rollouts_per_prompt: Annotated[
+        list[int],
+        Field(
+            description="Number of samples to generate for each benchmark.",
+        ),
+    ] = [1]
+
     interval: Annotated[
         int,
         Field(
@@ -137,6 +144,12 @@ class EvalConfig(BaseConfig):
             description="Whether to evaluate the base model we are training on.",
         ),
     ] = True
+
+    @model_validator(mode="after")
+    def validate_rollouts_per_prompt(self):
+        if len(self.rollouts_per_prompt) != len(self.benchmarks):
+            raise ValueError("Number of rollouts per prompt must be the same as the number of benchmarks")
+        return self
 
 
 class CheckpointConfig(BaseConfig):
