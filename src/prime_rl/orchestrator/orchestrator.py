@@ -317,7 +317,7 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Reward: {np.mean(rewards):.2f} | Advantage: {np.mean(advantages):.2f} | Throughput: {throughput:.1f} tokens/s | Seq. Length: {float(problem_seqlens.mean()):.1f} tokens/sample"
+        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Reward: {np.mean(rewards):.2f} | Throughput: {throughput:.1f} tokens/s | Seq. Length: {float(problem_seqlens.mean()):.1f} tokens/sample"
         logger.success(step_message)
 
         # Log progress metrics to monitor
