@@ -97,13 +97,7 @@ class WeightCheckpointConfig(BaseConfig):
     ] = True
 
 
-class BaseGRPOVariantConfig(BaseConfig):
-    """Base config class for GRPO variants."""
-
-    highest_entropy_ratio_loss: Annotated[float, Field(ge=0)] = 1.0
-
-
-class ClippingConfig(BaseGRPOVariantConfig):
+class ClippingConfig(BaseConfig):
     """Configures the clipping loss."""
 
     type: Literal["clip"] = "clip"
@@ -112,7 +106,7 @@ class ClippingConfig(BaseGRPOVariantConfig):
     clip_ratio: Annotated[float, Field(ge=0)] = 4.0
 
 
-class RatioConfig(BaseGRPOVariantConfig):
+class RatioConfig(BaseConfig):
     """Configures the ratio loss."""
 
     type: Literal["ratio"] = "ratio"
