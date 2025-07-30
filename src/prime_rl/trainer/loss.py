@@ -53,19 +53,7 @@ def grpo_loss_clip(
     epsilon_high: float,
     clip_ratio: float,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    """
-    DeepSeek Math Loss: https://arxiv.org/abs/2402.03300
-
-    Args:
-        policy_logprobs: Log probabilities from the policy model
-        ref_logprobs: Log probabilities from the reference model
-        advantages: Advantages for each token
-        beta: KL penalty coefficient
-        epsilon: Clipping parameter for PPO
-        ignore_index: Specifies a target value that is ignored and does not contribute to the loss
-    """
-    # Divide logits by sampling temperature.
-    # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+    
     shifted_logits = shifted_logits / temperature
     per_token_logps = selective_log_softmax(shifted_logits, input_ids)
 
@@ -94,8 +82,7 @@ def grpo_loss_ratio(
     temperature: float,
     clip_ratio: float,
 ) -> tuple[Tensor, Tensor, Tensor]:
-    # Divide logits by sampling temperature.
-    # See https://huggingface.co/blog/the_n_implementation_details_of_rlhf_with_ppo#policy-training-implementation-details
+    
     shifted_logits = shifted_logits / temperature
     per_token_logps = selective_log_softmax(shifted_logits, input_ids)
 
