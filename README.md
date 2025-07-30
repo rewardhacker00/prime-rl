@@ -404,7 +404,7 @@ uv run orchestrator @ configs/orchestrator/reverse_text.toml --bench
 To benchmark the trainer, simply run the trainer against a fake data loader matching the way the orchestrator would write the training batch.
 
 ```bash
-uv run trainer @ configs/trainer/reverse_text.toml --bench --data.fake "{'micro_batch_size': 8, 'batch_size': 128, 'seq_len': 128}"
+uv run trainer @ configs/trainer/reverse_text.toml --bench --data.fake.micro_batch_size 8 --data.fake.batch_size 128 --data.fake.seq_len 128
 ```
 
 **RL**
