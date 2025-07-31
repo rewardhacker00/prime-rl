@@ -9,7 +9,7 @@ mask_truncated_completions = false
 name = "willcb/Qwen2.5-0.5B-Reverse-SFT"
 
 [environment]
-id = "reverse-text"
+id = "vf-reverse-text"
 
 [sampling]
 max_tokens = 128

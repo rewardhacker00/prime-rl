@@ -11,7 +11,7 @@ name = "willcb/DeepSeek-R1-Distill-Qwen-7B"
 [monitor.wandb]
 
 [environment]
-id = "hendrycks-math"
+id = "vf-hendrycks-math"
 
 [monitor.wandb.log_extras]
 interval = 10

@@ -33,8 +33,8 @@ def make_rollouts(
     completion_tokens: list[list[int]],
     completion_masks: list[list[int]],
     completion_logprobs: list[list[float]],
-    rewards: list[list[float]],
-    advantages: list[list[float]],
+    rewards: list[float],
+    advantages: list[float],
 ) -> list[Rollout]:
     assert (
         len(problem_ids)

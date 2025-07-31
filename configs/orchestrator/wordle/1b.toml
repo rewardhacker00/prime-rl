@@ -11,7 +11,7 @@ name = "willcb/Qwen3-1.7B-Wordle"
 [monitor.wandb]
 
 [environment]
-id = "wordle"
+id = "vf-wordle"
 
 [environment.args]
 

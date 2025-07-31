@@ -10,11 +10,11 @@ from prime_rl.orchestrator import envs
 import lovely_tensors as lt
 import numpy as np
 import torch
+from verifiers import load_environment
 from transformers import AutoTokenizer
 
 from prime_rl.eval.utils import run_benchmark
 from prime_rl.orchestrator.ckpt import CheckpointManager, Progress
-from prime_rl.environments.registry import load_environment
 from prime_rl.orchestrator.client import (
     check_has_model,
     check_health,
@@ -68,6 +68,7 @@ async def orchestrate(config: OrchestratorConfig):
     logger.success("Inference pool ready")
 
     # Get checkpoint manager
+    ckpt_manager = None
     if config.ckpt:
         logger.info(f"Initializing checkpoint manager ({config.ckpt})")
         ckpt_manager = CheckpointManager(config.ckpt)
@@ -75,7 +76,7 @@ async def orchestrate(config: OrchestratorConfig):
     # Reset weights to base model if starting from scratch
     progress = Progress()
     ckpt_step = 0
-    if config.ckpt and config.ckpt.resume_step:
+    if config.ckpt and ckpt_manager and config.ckpt.resume_step:
         logger.info(f"Resuming training from checkpoint step `{config.ckpt.resume_step}`")
         ckpt_manager.load(progress, step=config.ckpt.resume_step)
         ckpt_step = max(progress.step - config.async_level, 0)
@@ -86,7 +87,7 @@ async def orchestrate(config: OrchestratorConfig):
 
     # Load environment and extract dataset
     logger.info(f"Loading environment {config.environment.id} with args {config.environment.args}")
-    vf_env = load_environment(config.environment.id, config.environment.args)
+    vf_env = load_environment(config.environment.id, **config.environment.args)
     dataset = vf_env.get_dataset(seed=config.seed)
 
     # Setup buffer
@@ -105,7 +106,13 @@ async def orchestrate(config: OrchestratorConfig):
     while True:
         # Save checkpoint (if we are not at the first step)
         save_ckpt_time = 0
-        if config.ckpt and config.ckpt.interval and not is_first_step and progress.step % config.ckpt.interval == 0:
+        if (
+            config.ckpt
+            and ckpt_manager
+            and config.ckpt.interval
+            and not is_first_step
+            and progress.step % config.ckpt.interval == 0
+        ):
             logger.info(f"Saving checkpoint at step {progress.step}")
             save_ckpt_start_time = time.time()
             ckpt_manager.save(progress, step=progress.step)
@@ -215,10 +222,10 @@ async def orchestrate(config: OrchestratorConfig):
             calls_to_generate += 1
 
             results = vf_env.process_env_results_vllm(
-                prompts=outputs["prompt"],
-                completions=outputs["completion"],
-                states=outputs["state"],
-                rewards=outputs["reward"],
+                prompts=outputs.prompt,
+                completions=outputs.completion,
+                states=outputs.state,
+                rewards=outputs.reward,
                 processing_class=tokenizer,
                 max_seq_len=config.seq_len,
                 mask_env_responses=config.mask_env_responses,
@@ -227,7 +234,7 @@ async def orchestrate(config: OrchestratorConfig):
             )
 
             advantages = compute_advantages(
-                rewards=outputs["reward"],
+                rewards=outputs.reward,
                 samples_per_problem=config.rollouts_per_prompt,
                 advantage_type=config.advantage_type,
             )
@@ -235,12 +242,12 @@ async def orchestrate(config: OrchestratorConfig):
             # Update pool
             rollouts = make_rollouts(
                 problem_ids=problem_ids,
-                prompt_tokens=results["prompt_ids"],
-                prompt_masks=results["prompt_mask"],
-                completion_tokens=results["completion_ids"],
-                completion_masks=results["completion_mask"],
-                completion_logprobs=results["completion_logprobs"],
-                rewards=outputs["reward"],
+                prompt_tokens=results.prompt_ids,
+                prompt_masks=results.prompt_mask,
+                completion_tokens=results.completion_ids,
+                completion_masks=results.completion_mask,
+                completion_logprobs=results.completion_logprobs,
+                rewards=outputs.reward,
                 advantages=advantages,
             )
             buffer.update(rollouts)
@@ -392,7 +399,7 @@ async def orchestrate(config: OrchestratorConfig):
         monitor.wandb.log_final_distributions()
 
     # Write final checkpoint
-    if config.ckpt:
+    if config.ckpt and ckpt_manager:
         logger.info("Writing final checkpoint")
         ckpt_manager.save(progress, step=progress.step)
 
