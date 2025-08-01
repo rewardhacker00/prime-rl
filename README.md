@@ -324,7 +324,7 @@ uv run vf-install vf-custom-environment
 
 To persist your Environment module installation in the package-wide `pyproject.toml`, do:
 ```bash
-uv add "vf-custom-environment @ ./environments/vf_custom_environment"
+uv add --optional vf "vf-custom-environment @ ./environments/vf_custom_environment"
 ```
 
 For quick API-based testing post-installation, do:
