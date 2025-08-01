@@ -1,6 +1,6 @@
 version = 1
-revision = 3
-requires-python = "==3.12.*"
+revision = 2
+requires-python = ">=3.12.0, <3.13"
 resolution-markers = [
     "sys_platform == 'linux'",
     "sys_platform != 'linux'",
@@ -12,8 +12,13 @@ prerelease-mode = "allow"
 [manifest]
 members = [
     "prime-rl",
+    "vf-ascii-tree",
+    "vf-hendrycks-math",
     "vf-intellect-math",
+    "vf-pydantic-adherence",
     "vf-reverse-text",
+    "vf-skywork-math",
+    "vf-unscramble",
 ]
 
 [[package]]
@@ -2141,9 +2146,6 @@ dependencies = [
     { name = "transformers" },
     { name = "uvloop" },
     { name = "verifiers" },
-    { name = "vf-intellect-math" },
-    { name = "vf-reverse-text" },
-    { name = "vf-wordle" },
     { name = "vllm" },
     { name = "wandb" },
 ]
@@ -2154,6 +2156,15 @@ flash-attn = [
 ]
 flash-infer = [
     { name = "flashinfer-python" },
+]
+vf = [
+    { name = "vf-ascii-tree" },
+    { name = "vf-hendrycks-math" },
+    { name = "vf-intellect-math" },
+    { name = "vf-pydantic-adherence" },
+    { name = "vf-reverse-text" },
+    { name = "vf-skywork-math" },
+    { name = "vf-unscramble" },
 ]
 
 [package.dev-dependencies]
@@ -2194,13 +2205,17 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.53.0" },
     { name = "uvloop", specifier = ">=0.21.0" },
     { name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" },
-    { name = "vf-intellect-math", editable = "environments/vf_intellect_math" },
-    { name = "vf-reverse-text", editable = "environments/vf_reverse_text" },
-    { name = "vf-wordle", git = "https://github.com/willccbb/verifiers.git?subdirectory=environments%2Fvf_wordle&rev=main" },
+    { name = "vf-ascii-tree", marker = "extra == 'vf'", editable = "environments/vf_ascii_tree" },
+    { name = "vf-hendrycks-math", marker = "extra == 'vf'", editable = "environments/vf_hendrycks_math" },
+    { name = "vf-intellect-math", marker = "extra == 'vf'", editable = "environments/vf_intellect_math" },
+    { name = "vf-pydantic-adherence", marker = "extra == 'vf'", editable = "environments/vf_pydantic_adherence" },
+    { name = "vf-reverse-text", marker = "extra == 'vf'", editable = "environments/vf_reverse_text" },
+    { name = "vf-skywork-math", marker = "extra == 'vf'", editable = "environments/vf_skywork_math" },
+    { name = "vf-unscramble", marker = "extra == 'vf'", editable = "environments/vf_unscramble" },
     { name = "vllm", specifier = ">=0.9.1" },
     { name = "wandb", specifier = ">=0.20.1" },
 ]
-provides-extras = ["flash-attn", "flash-infer"]
+provides-extras = ["flash-attn", "flash-infer", "vf"]
 
 [package.metadata.requires-dev]
 dev = [
@@ -3284,6 +3299,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "vf-ascii-tree"
+version = "0.1.0"
+source = { editable = "environments/vf_ascii_tree" }
+dependencies = [
+    { name = "verifiers" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" }]
+
+[[package]]
+name = "vf-hendrycks-math"
+version = "0.1.0"
+source = { editable = "environments/vf_hendrycks_math" }
+dependencies = [
+    { name = "datasets" },
+    { name = "verifiers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets" },
+    { name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" },
+]
+
+[[package]]
 name = "vf-intellect-math"
 version = "0.1.0"
 source = { editable = "environments/vf_intellect_math" }
@@ -3293,6 +3334,23 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" }]
+
+[[package]]
+name = "vf-pydantic-adherence"
+version = "0.1.0"
+source = { editable = "environments/vf_pydantic_adherence" }
+dependencies = [
+    { name = "datasets" },
+    { name = "pydantic" },
+    { name = "verifiers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets" },
+    { name = "pydantic" },
+    { name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" },
+]
 
 [[package]]
 name = "vf-reverse-text"
@@ -3306,13 +3364,29 @@ dependencies = [
 requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" }]
 
 [[package]]
-name = "vf-wordle"
+name = "vf-skywork-math"
 version = "0.1.0"
-source = { git = "https://github.com/willccbb/verifiers.git?subdirectory=environments%2Fvf_wordle&rev=main#4b35d0c8e05c77e03f119598195e0b17eb8e5a3c" }
+source = { editable = "environments/vf_skywork_math" }
 dependencies = [
-    { name = "nltk" },
-    { name = "textarena" },
     { name = "verifiers" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" }]
+
+[[package]]
+name = "vf-unscramble"
+version = "0.1.0"
+source = { editable = "environments/vf_unscramble" }
+dependencies = [
+    { name = "datasets" },
+    { name = "verifiers" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "datasets" },
+    { name = "verifiers", git = "https://github.com/willccbb/verifiers?rev=74c604f" },
 ]
 
 [[package]]
