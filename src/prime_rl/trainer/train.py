@@ -19,7 +19,7 @@ from prime_rl.trainer.weights import WeightCheckpointManager
 from prime_rl.trainer.config import TrainerConfig
 from prime_rl.trainer.data import DataLoader, FakeDataLoader
 from prime_rl.trainer.logger import setup_logger
-from prime_rl.trainer.loss import grpo_loss, compute_entropy, shift_logits, compute_logprobs
+from prime_rl.trainer.loss import grpo_loss, compute_entropy, shift_logits, compute_logprobs, ImportanceRatioMetrics
 from prime_rl.trainer.model import (
     forward,
     get_tokenizer,
@@ -218,12 +218,14 @@ def train(config: TrainerConfig):
 
         forward_backward_start_time = time.time()
         loss_metrics = defaultdict(float)
+        importance_ratio_metrics = ImportanceRatioMetrics()
         num_micro_batches = len(micro_batches)
         micro_batch_size, seq_len = micro_batches[0]["input_ids"].shape
         batch_size = micro_batch_size * num_micro_batches
 
         # Normalize by the number of unmasked tokens in the batch (per-batch length normalization)
-        loss_scale = sum(micro_batch["loss_mask"].sum() for micro_batch in micro_batches)
+        total_non_masked_tokens = sum(micro_batch["loss_mask"].sum() for micro_batch in micro_batches)
+        loss_scale = total_non_masked_tokens
 
         logger.info(f"Starting forward and backward pass ({num_micro_batches=}, {loss_scale=})")
         for micro_step, micro_batch in enumerate(micro_batches, start=1):
@@ -241,7 +243,7 @@ def train(config: TrainerConfig):
             del logits
 
             # Compute loss
-            loss, importance_ratio, clipped_token_count = grpo_loss(
+            loss, ratio_info = grpo_loss(
                 shifted_logits=shifted_logits,
                 input_ids=input_ids,
                 advantages=advantages,
@@ -262,10 +264,10 @@ def train(config: TrainerConfig):
             # Accumulate unnormalized local metrics
             loss_metrics["loss/loss"] += loss.detach().float()
             loss_metrics["loss/entropy"] += entropy.detach().float()
-            loss_metrics["loss/importance_ratio"] += importance_ratio.detach().float()
-            loss_metrics["loss/clipped_ratio"] += clipped_token_count.detach().float()
 
-            recomputed_logprob_error: Tensor = micro_batch.get("recomputed_logprob_error", torch.tensor(0.0))
+            importance_ratio_metrics.update(ratio_info)
+
+            recomputed_logprob_error: Tensor = micro_batch.get("recomputed_logprob_error", torch.tensor(1.0))
             loss_metrics["loss/recomputed_logprob_error"] += recomputed_logprob_error.detach().float()
 
             # Scale loss by scale factor before backward pass
@@ -276,7 +278,7 @@ def train(config: TrainerConfig):
 
             # We report per-micro batch length normalized metrics here
             logger.debug(
-                f"Completed micro batch {micro_step}/{num_micro_batches} (loss={(loss.item() / loss_mask.sum()):.2f}, entropy={(entropy.item() / loss_mask.sum()):.2f}, importance_ratio={(importance_ratio.item() / loss_mask.sum()):.2f})"
+                f"Completed micro batch {micro_step}/{num_micro_batches} (loss={(loss.item() / loss_mask.sum()):.2f}, entropy={(entropy.item() / loss_mask.sum()):.2f}, importance_ratio={(ratio_info.ratio_sum.item() / loss_mask.sum()):.2f})"
             )
 
         # Normalize all loss metrics globally before reporting
@@ -288,6 +290,8 @@ def train(config: TrainerConfig):
         for key, value in loss_metrics.items():
             dist.all_reduce(value.to("cuda"), op=dist.ReduceOp.AVG)
             loss_metrics[key] = value
+
+        importance_ratio_metrics.sync(total_non_masked_tokens, loss_scale)
 
         # Optionally, clip the gradients
         logger.debug(f"Clipping gradients to {config.loss.max_norm}")
@@ -328,11 +332,13 @@ def train(config: TrainerConfig):
         perf_counter.count_tokens(num_tokens)
         throughput = perf_counter.get_tokens_per_second() or 0
         mfu = perf_counter.get_mfu() or 0
-        loss_metrics = {key: value.item() for key, value in loss_metrics.items()}
+        loss_metrics = {
+            key: value.item() if isinstance(value, torch.Tensor) else value for key, value in loss_metrics.items()
+        }
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Loss: {loss_metrics['loss/loss']:.2f} | Entropy: {loss_metrics['loss/entropy']:.2f} | Importance Ratio: {loss_metrics['loss/importance_ratio']:.2f} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}%"
+        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Loss: {loss_metrics['loss/loss']:.2f} | Entropy: {loss_metrics['loss/entropy']:.2f} | Importance Ratio Error: {importance_ratio_metrics.raw_error_sum:.2f} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}%"
         logger.success(step_message)
 
         # Log performance metrics
@@ -346,6 +352,11 @@ def train(config: TrainerConfig):
         # Log loss metrics
         loss_metrics["step"] = progress.step
         monitor.log(loss_metrics)
+
+        # Log importance ratio metrics
+        metric = importance_ratio_metrics.to_dict()
+        metric["step"] = progress.step
+        monitor.log(metric)
 
         # Log time metrics
         time_metrics = {
