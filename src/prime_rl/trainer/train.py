@@ -91,10 +91,8 @@ def train(config: TrainerConfig):
     )
 
     # Set up the learning rate scheduler
-    scheduler = create_lr_scheduler(optimizer, config.optim.scheduler_config, config.max_steps)
-    logger.info(
-        f"Using `{config.optim.scheduler_config.scheduler}` scheduler (warmup_steps={config.optim.scheduler_config.warmup_steps}, decay_steps={getattr(config.optim.scheduler_config, 'decay_steps', None)})"
-    )
+    scheduler = create_lr_scheduler(optimizer, config.optim.scheduler, config.max_steps)
+    logger.info(f"Using `{config.optim.scheduler.type}` scheduler ({config.optim.scheduler})")
 
     # Get checkpoint managers
     logger.info(f"Initializing weight checkpoint manager ({config.weights})")
@@ -107,7 +105,7 @@ def train(config: TrainerConfig):
     progress = Progress()
     if config.ckpt and config.ckpt.resume_step:
         logger.info(f"Resuming training from checkpoint step `{config.ckpt.resume_step}`")
-        ckpt_manager.load(model, [optimizer], progress, step=config.ckpt.resume_step)
+        ckpt_manager.load(model, [optimizer], scheduler, progress, step=config.ckpt.resume_step)
     logger.info(
         f"Starting from step {progress.step} (total_tokens={progress.total_tokens}, total_samples={progress.total_samples})"
     )
@@ -154,7 +152,7 @@ def train(config: TrainerConfig):
         if config.ckpt and config.ckpt.interval and not is_first_step and progress.step % config.ckpt.interval == 0:
             logger.info(f"Saving checkpoint at step {progress.step}")
             save_ckpt_start_time = time.time()
-            ckpt_manager.save(model, [optimizer], progress, step=progress.step)
+            ckpt_manager.save(model, [optimizer], scheduler, progress, step=progress.step)
             save_ckpt_time = time.time() - save_ckpt_start_time
 
         # Break if we have reached the maximum number of steps
@@ -396,7 +394,7 @@ def train(config: TrainerConfig):
     # Write final checkpoint
     if config.ckpt:
         logger.info("Writing final checkpoint")
-        ckpt_manager.save(model, [optimizer], progress, step=progress.step)
+        ckpt_manager.save(model, [optimizer], scheduler, progress, step=progress.step)
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
     logger.success("Trainer finished!")
