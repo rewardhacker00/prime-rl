@@ -20,6 +20,7 @@ from prime_rl.trainer.config import TrainerConfig
 from prime_rl.trainer.data import DataLoader, FakeDataLoader
 from prime_rl.trainer.logger import setup_logger
 from prime_rl.trainer.loss import grpo_loss, compute_entropy, shift_logits, compute_logprobs, ImportanceRatioMetrics
+from prime_rl.trainer.scheduler import create_lr_scheduler
 from prime_rl.trainer.model import (
     forward,
     get_tokenizer,
@@ -87,6 +88,12 @@ def train(config: TrainerConfig):
         lr=config.optim.lr,
         weight_decay=config.optim.weight_decay,
         betas=(config.optim.betas1, config.optim.betas2),
+    )
+
+    # Set up the learning rate scheduler
+    scheduler = create_lr_scheduler(optimizer, config.optim.scheduler_config, config.max_steps)
+    logger.info(
+        f"Using `{config.optim.scheduler_config.scheduler}` scheduler (warmup_steps={config.optim.scheduler_config.warmup_steps}, decay_steps={getattr(config.optim.scheduler_config, 'decay_steps', None)})"
     )
 
     # Get checkpoint managers
@@ -303,6 +310,9 @@ def train(config: TrainerConfig):
         optimizer.step()
         optimizer.zero_grad()
 
+        # Update learning rate scheduler
+        scheduler.step()
+
         forward_backward_time = time.time() - forward_backward_start_time
 
         # Optionally, broadcast the weight checkpoint from master rank
@@ -338,7 +348,8 @@ def train(config: TrainerConfig):
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Loss: {loss_metrics['loss/loss']:.2f} | Entropy: {loss_metrics['loss/entropy']:.2f} | Importance Ratio Error: {importance_ratio_metrics.raw_error_sum:.2f} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}%"
+        current_lr = optimizer.param_groups[0]["lr"]
+        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Loss: {loss_metrics['loss/loss']:.2f} | Entropy: {loss_metrics['loss/entropy']:.2f} | Importance Ratio Error: {importance_ratio_metrics.raw_error_sum:.2f} | LR: {current_lr:.2e} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}%"
         logger.success(step_message)
 
         # Log performance metrics
@@ -348,6 +359,13 @@ def train(config: TrainerConfig):
             "step": progress.step,
         }
         monitor.log(perf_metrics)
+
+        # Log optimizer metrics
+        optim_metrics = {
+            "optim/lr": current_lr,
+            "step": progress.step,
+        }
+        monitor.log(optim_metrics)
 
         # Log loss metrics
         loss_metrics["step"] = progress.step
