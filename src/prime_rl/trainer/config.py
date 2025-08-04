@@ -87,7 +87,7 @@ class OptimizerConfig(BaseConfig):
     lr: Annotated[float, Field(ge=0)] = 4e-4
     weight_decay: Annotated[float, Field(ge=0)] = 0.01
     betas1: Annotated[float, Field(ge=0)] = 0.9
-    betas2: Annotated[float, Field(ge=0)] = 0.99
+    betas2: Annotated[float, Field(ge=0)] = 0.999
 
     # LR Scheduler configuration
     scheduler: SchedulerConfig = Field(discriminator="type", default=ConstantSchedulerConfig())
