@@ -1,8 +1,10 @@
+from collections import defaultdict
 from itertools import chain
 from typing import Any, TypeAlias
 
 import pandas as pd
 import torch
+import torch.distributed as dist
 from rich.console import Console
 from rich.table import Table
 from torch import Tensor
@@ -10,17 +12,6 @@ from torch.distributed.tensor import DTensor
 
 from prime_rl.trainer.model import Model
 from prime_rl.utils.utils import format_num, format_time
-
-
-class FakeTokenizer:
-    def __init__(self):
-        self.vocab_size = 1000
-        self.bos_token_id = 0
-        self.eos_token_id = 1
-        self.pad_token_id = 2
-
-    def __len__(self):
-        return self.vocab_size
 
 
 def get_real_tensor(tensor: Tensor | DTensor) -> Tensor:
@@ -122,3 +113,58 @@ def print_benchmark(history: dict[str, list[Any]]) -> None:
 
     # Display table
     console.print(table)
+
+
+def flexible_all_gather(tensor: Tensor) -> Tensor:
+    """
+    All-gather a 1D tensor between all ranks, with potentially different numbr of element per rank.
+    Returns a tensor of shape (world_size * max_numel, dtype=tensor.dtype, device=tensor.device)
+    """
+
+    assert tensor.ndim == 1, "Can only flexibly all-gather 1D tensors"
+
+    # Find the tensor with the most elements
+    local_numel = torch.tensor(tensor.shape[0], device=tensor.device)
+    all_numels = [torch.tensor(0, device=tensor.device)] * dist.get_world_size()
+    dist.all_gather(all_numels, local_numel)
+    all_numels = [numel.item() for numel in all_numels]
+    max_numel = max(all_numels)
+
+    # Pad the tensor with zeros if it has less elements than the maximum
+    if local_numel < max_numel:
+        tensor = torch.cat([tensor, torch.zeros(max_numel - local_numel, dtype=tensor.dtype, device=tensor.device)])
+
+    # All-gather the tensors
+    all_tensors = [torch.zeros(max_numel, dtype=tensor.dtype, device=tensor.device)] * dist.get_world_size()
+    dist.all_gather(all_tensors, tensor)
+    all_tensors_unpadded = [tensor[:numel] for tensor, numel in zip(all_tensors, all_numels)]
+
+    return torch.cat(all_tensors_unpadded, dim=0)
+
+
+class Tensors(defaultdict):
+    """A class to accumulate tensors and compute statistics (mean, median, std, min, max) across multiple steps and ranks."""
+
+    def __init__(self):
+        assert dist.is_initialized(), "Tensors requires a distributed environment"
+        super().__init__(list)
+
+    def compute_stats(self) -> dict[str, float | int]:
+        """Synchronize the tensor statistic across all ranks for each key and compute relevant statistics."""
+
+        metrics = {}
+        for key, tensors in self.items():
+            # All-gather tensors across steps and ranks (get global distribution)
+            tensor = torch.cat(tensors, dim=0).to("cuda")
+            assert tensor.ndim == 1, "Can only aggregate 1D tensors"
+            tensor = flexible_all_gather(tensor)
+            assert tensor.ndim == 1, "Can only aggregate 1D tensors"
+
+            # Compute relevant tensor statistics
+            metrics[f"{key}/mean"] = tensor.mean().item()
+            metrics[f"{key}/median"] = torch.median(tensor).item()
+            metrics[f"{key}/std"] = tensor.std().item()
+            metrics[f"{key}/min"] = tensor.min().item()
+            metrics[f"{key}/max"] = tensor.max().item()
+
+        return metrics

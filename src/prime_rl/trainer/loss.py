@@ -1,140 +1,90 @@
-from dataclasses import dataclass
-
 import torch
-import torch.distributed as dist
 from beartype import beartype as typechecker
 from jaxtyping import Float, Int, jaxtyped
 from torch import Tensor
 from torch.nn import functional as F
 
 from prime_rl.trainer.config import LossConfig
-from prime_rl.trainer.model import Model, forward
-
-
-@dataclass
-class RatioInfo:
-    ratio_sum: Float[Tensor, "1"]
-    clipped_token_count: Float[Tensor, "1"]
-
-    raw_ratio_sum: Float[Tensor, "1"]
-    raw_ratio_max: Float[Tensor, "1"]
-    raw_ratio_min: Float[Tensor, "1"]
-
-    raw_ratio_abs_sum: Float[Tensor, "1"]
 
 
 @jaxtyped(typechecker=typechecker)
-def grpo_loss(
-    shifted_logits: Float[Tensor, "batch seq vocab"],
-    input_ids: Int[Tensor, "batch seq"],
+def compute_loss(
+    logprobs: Float[Tensor, "batch seq"],
+    old_logprobs: Float[Tensor, "batch seq"],
     advantages: Float[Tensor, "batch seq"],
-    original_logprobs: Float[Tensor, "batch seq"],
-    loss_mask: Int[Tensor, "batch seq"],
-    temperature: float,
     loss_config: LossConfig,
-) -> tuple[Tensor, RatioInfo]:
+) -> tuple[Float[Tensor, "batch seq"], dict[str, Float[Tensor, "batch seq"]]]:
     if loss_config.type == "clip":
         return grpo_loss_clip(
-            shifted_logits=shifted_logits,
-            input_ids=input_ids,
+            logprobs=logprobs,
+            old_logprobs=old_logprobs,
             advantages=advantages,
-            original_logprobs=original_logprobs,
-            loss_mask=loss_mask,
-            temperature=temperature,
             epsilon_low=loss_config.epsilon_low,
             epsilon_high=loss_config.epsilon_high,
             clip_ratio=loss_config.clip_ratio,
         )
     elif loss_config.type == "ratio":
         return grpo_loss_ratio(
-            shifted_logits=shifted_logits,
-            input_ids=input_ids,
+            logprobs=logprobs,
+            old_logprobs=old_logprobs,
             advantages=advantages,
-            original_logprobs=original_logprobs,
-            loss_mask=loss_mask,
-            temperature=temperature,
             clip_ratio=loss_config.clip_ratio,
         )
 
 
 @jaxtyped(typechecker=typechecker)
 def grpo_loss_clip(
-    shifted_logits: Float[Tensor, "batch seq vocab"],
-    input_ids: Int[Tensor, "batch seq"],
+    logprobs: Float[Tensor, "batch seq"],
+    old_logprobs: Float[Tensor, "batch seq"],
     advantages: Float[Tensor, "batch seq"],
-    original_logprobs: Float[Tensor, "batch seq"],
-    loss_mask: Int[Tensor, "batch seq"],
-    temperature: float,
     epsilon_low: float,
     epsilon_high: float,
     clip_ratio: float,
-) -> tuple[Tensor, RatioInfo]:
-    assert shifted_logits.dtype == torch.float32, "shifted_logits must be float32"
-    shifted_logits = shifted_logits / temperature
-    per_token_logps = selective_log_softmax(shifted_logits, input_ids)
+) -> tuple[Float[Tensor, "batch seq"], dict[str, Float[Tensor, "batch seq"]]]:
+    assert logprobs.dtype == torch.float32, "logprobs must be float32"
+    assert old_logprobs.dtype == torch.float32, "old_logprobs must be float32"
+    assert advantages.dtype == torch.float32, "advantages must be float32"
 
-    raw_ratio = torch.exp(per_token_logps - original_logprobs)
-
-    coef_1 = torch.clamp(raw_ratio, 0, clip_ratio)
-
+    # Compute the per-token loss
+    importance_ratio = torch.exp(logprobs - old_logprobs)
+    coef_1 = torch.clamp(importance_ratio, 0, clip_ratio)
     coef_2 = torch.clamp(coef_1, 1 - epsilon_low, 1 + epsilon_high)
-    per_token_loss1 = -coef_1 * advantages
-    per_token_loss2 = -coef_2 * advantages
-    per_token_loss = torch.max(per_token_loss1, per_token_loss2)
+    loss_1 = -coef_1 * advantages
+    loss_2 = -coef_2 * advantages
+    loss = torch.max(loss_1, loss_2)
+    is_clipped = (loss_1 < loss_2).float()
 
-    is_clipped = (per_token_loss1 < per_token_loss2).float()
-    clipped_token_count = _masked_sum(is_clipped, loss_mask)
-
-    loss = _masked_sum(per_token_loss, loss_mask)
-
-    raw_ratio = (raw_ratio.detach() - 1) * loss_mask
-    ratio = (coef_2.detach() - 1) * loss_mask
-
-    return loss, RatioInfo(
-        ratio_sum=ratio.sum().float(),
-        clipped_token_count=clipped_token_count,
-        raw_ratio_sum=raw_ratio.sum().float(),
-        raw_ratio_max=raw_ratio.max().float() + 1,
-        raw_ratio_min=raw_ratio.min().float() + 1,
-        raw_ratio_abs_sum=raw_ratio.abs().sum().float(),
-    )
+    return loss, {
+        "loss": loss,
+        "coef_1": coef_1,
+        "coef_2": coef_2,
+        "is_clipped": is_clipped,
+    }
 
 
 @jaxtyped(typechecker=typechecker)
 def grpo_loss_ratio(
-    shifted_logits: Float[Tensor, "batch seq vocab"],
-    input_ids: Int[Tensor, "batch seq"],
+    logprobs: Float[Tensor, "batch seq"],
+    old_logprobs: Float[Tensor, "batch seq"],
     advantages: Float[Tensor, "batch seq"],
-    original_logprobs: Float[Tensor, "batch seq"],
-    loss_mask: Int[Tensor, "batch seq"],
-    temperature: float,
     clip_ratio: float,
-) -> tuple[Tensor, RatioInfo]:
-    assert shifted_logits.dtype == torch.float32, "shifted_logits must be float32"
-    shifted_logits = shifted_logits / temperature
-    per_token_logps = selective_log_softmax(shifted_logits, input_ids)
+) -> tuple[Float[Tensor, "batch seq"], dict[str, Float[Tensor, "batch seq"]]]:
+    assert logprobs.dtype == torch.float32, "logprobs must be float32"
+    assert old_logprobs.dtype == torch.float32, "old_logprobs must be float32"
+    assert advantages.dtype == torch.float32, "advantages must be float32"
 
-    raw_ratio = torch.exp(per_token_logps - original_logprobs)
+    # Compute the per-token loss
+    importance_ratio = torch.exp(logprobs - old_logprobs)  # (B, L)
+    clipped_importance_ratio = torch.clamp(importance_ratio, 0, clip_ratio)  # (B, L)
+    loss = -clipped_importance_ratio * advantages  # (B, L)
+    is_clipped = (importance_ratio > clip_ratio).float()  # (B, L)
 
-    is_clipped = (raw_ratio > clip_ratio).float()
-    clipped_token_count = _masked_sum(is_clipped, loss_mask)
-
-    ratio = torch.clamp(raw_ratio, 0, clip_ratio)
-    loss = -ratio * advantages
-
-    loss = _masked_sum(loss, loss_mask)
-
-    raw_ratio = (raw_ratio.detach() - 1) * loss_mask
-    ratio = (ratio.detach() - 1) * loss_mask
-
-    return loss, RatioInfo(
-        ratio_sum=ratio.sum(),
-        clipped_token_count=clipped_token_count,
-        raw_ratio_sum=raw_ratio.sum().float(),
-        raw_ratio_max=raw_ratio.max().float() + 1,
-        raw_ratio_min=raw_ratio.min().float() + 1,
-        raw_ratio_abs_sum=raw_ratio.abs().sum().float(),
-    )
+    return loss, {
+        "loss": loss,
+        "importance_ratio": importance_ratio,
+        "clipped_importance_ratio": clipped_importance_ratio,
+        "is_clipped": is_clipped,
+    }
 
 
 @jaxtyped(typechecker=typechecker)
@@ -178,108 +128,19 @@ def selective_log_softmax(
 
 
 @jaxtyped(typechecker=typechecker)
-def compute_logprobs(
-    model: Model,
-    input_ids: Int[Tensor, "batch seq"],
-    position_ids: Int[Tensor, "batch seq"],
-    temperature: float,
-) -> Float[Tensor, "batch seq"]:
-    logits = forward(model, input_ids, position_ids).contiguous()
-    shifted_logits = shift_logits(logits)
-    shifted_logits = shifted_logits / temperature
-    logprobs = selective_log_softmax(shifted_logits, input_ids)
-    del logits, shifted_logits
-    return logprobs
-
-
-@jaxtyped(typechecker=typechecker)
-def compute_entropy(
-    shifted_logits: Float[Tensor, "batch seq vocab"],
-    loss_mask: Int[Tensor, "batch seq"],
-    temperature: float,
-) -> Tensor:
-    shifted_logits = shifted_logits / temperature
+def compute_entropy(shifted_logits: Float[Tensor, "batch seq vocab"]) -> Float[Tensor, "batch seq"]:
     pd = torch.nn.functional.softmax(shifted_logits, dim=-1)
     entropy = torch.logsumexp(shifted_logits, dim=-1) - torch.sum(pd * shifted_logits, dim=-1)
 
-    return _masked_sum(entropy, loss_mask)
-
-
-def _masked_sum(tensor: Tensor, mask: Tensor) -> Tensor:
-    """Sums over the unmasked tensor values"""
-    return (tensor * mask).sum()
+    return entropy
 
 
 @jaxtyped(typechecker=typechecker)
 def shift_logits(logits: Float[Tensor, "batch seq vocab"]) -> Float[Tensor, "batch seq vocab"]:
     """Removes final token logits and adds a zero logit for the first token."""
     # We drop the last logit because it corresponds to the next token that will be sampled but is not here yet
-    B, _, V = logits.shape
-    logits = logits[:, :-1, :]  # (B, L-1, V)
-    zeros = torch.zeros(B, 1, V, device=logits.device, dtype=logits.dtype)  # (B, 1, V)
-    logits = torch.cat([zeros, logits], dim=1)  # (B, L, V)
+    batch, seq, vocab = logits.shape
+    logits = logits[:, :-1, :]  # (batch, seq-1, vocab)
+    zeros = torch.zeros(batch, 1, vocab, device=logits.device, dtype=logits.dtype)  # (batch, 1, vocab)
+    logits = torch.cat([zeros, logits], dim=1)  # (batch, seq, vocab)
     return logits
-
-
-class ImportanceRatioMetrics:
-    """
-    This class is used to compute the importance ratio metrics
-
-    The importance ratio metrics are computed as follows:
-    - error_sum: sum of the importance ratio error. Error is above or below 1
-    - raw_error_sum: sum of the raw importance ratio error
-    - max: max of the raw importance ratio
-    - min: min of the raw importance ratio
-    - clipped: clipped percentage of the importance ratio. This is the percentage of tokens that were clipped
-    - ratio: ratio of the importance ratio. This is the ratio after clipping
-    - raw_ratio: raw ratio of the importance ratio. This is the ratio before clipping
-    """
-
-    def __init__(self):
-        self.error_sum = torch.tensor(0.0).to("cuda")
-        self.raw_error_sum = torch.tensor(0.0).to("cuda")
-        self.max = torch.tensor(0.0).to("cuda")
-        self.min = torch.tensor(float("inf")).to("cuda")
-        self.clipped = torch.tensor(0.0).to("cuda")
-        self.ratio = torch.tensor(0.0).to("cuda")
-        self.raw_ratio = torch.tensor(0.0).to("cuda")
-
-        self.raw_abs_error_sum = torch.tensor(0.0).to("cuda")
-
-    def update(self, ratio_info: RatioInfo):
-        self.error_sum += ratio_info.ratio_sum.detach().float()
-        self.raw_error_sum += ratio_info.raw_ratio_sum.detach().float()
-        self.raw_abs_error_sum += ratio_info.raw_ratio_abs_sum.detach().float()
-        self.max = torch.max(self.max, ratio_info.raw_ratio_max.detach().float())
-        self.min = torch.min(self.min, ratio_info.raw_ratio_min.detach().float())
-        self.clipped += ratio_info.clipped_token_count.detach().float()
-
-    def sync(self, total_non_masked_tokens: Tensor, loss_scale: float):
-        """
-        Sync the importance ratio metrics across all ranks.
-        """
-        self.clipped = self.clipped / loss_scale
-        dist.all_reduce(self.clipped, op=dist.ReduceOp.AVG)
-        dist.all_reduce(self.max, op=dist.ReduceOp.MAX)
-        dist.all_reduce(self.min, op=dist.ReduceOp.MIN)
-        dist.all_reduce(self.error_sum, op=dist.ReduceOp.SUM)
-        dist.all_reduce(self.raw_error_sum, op=dist.ReduceOp.SUM)
-        dist.all_reduce(self.raw_abs_error_sum, op=dist.ReduceOp.SUM)
-
-        self.ratio = (total_non_masked_tokens + self.error_sum) / total_non_masked_tokens
-        self.raw_ratio = (total_non_masked_tokens + self.raw_error_sum) / total_non_masked_tokens
-
-    def to_dict(self) -> dict[str, float]:
-        """
-        return a dict of float values (could be used to log to wandb)
-        """
-        return {
-            "importance_ratio/error_sum": self.error_sum.item(),
-            "importance_ratio/raw_error_sum": self.raw_error_sum.item(),
-            "importance_ratio/max": self.max.item(),
-            "importance_ratio/min": self.min.item() if self.min != float("inf") else 0.0,
-            "importance_ratio/clipped": self.clipped.item(),
-            "importance_ratio/ratio": self.ratio.item(),
-            "importance_ratio/raw_ratio": self.raw_ratio.item(),
-            "importance_ratio/raw_abs_error_sum": self.raw_abs_error_sum.item(),
-        }

@@ -8,7 +8,6 @@ from pathlib import Path
 from prime_rl.orchestrator import envs
 
 import lovely_tensors as lt
-import numpy as np
 import torch
 from verifiers import load_environment
 from transformers import AutoTokenizer
@@ -260,29 +259,30 @@ async def orchestrate(config: OrchestratorConfig):
             problems_to_sample = problems_per_batch - problems_sampled
 
         # Unpack accepted rollouts
-        rewards = [rollout.reward for rollout in accepted_rollouts]
-        advantages = [rollout.advantage for rollout in accepted_rollouts]
         problem_ids = [rollout.problem_id for rollout in accepted_rollouts]
+        rewards = torch.tensor([rollout.reward for rollout in accepted_rollouts])
+        advantages = torch.tensor([rollout.advantage for rollout in accepted_rollouts])
+        assert rewards.numel() == advantages.numel() == config.batch_size
         prompt_tokens = [rollout.prompt_tokens for rollout in accepted_rollouts]
         completion_tokens = [rollout.completion_tokens for rollout in accepted_rollouts]
 
-        logger.debug(f"Computed rewards: {lt.lovely(torch.tensor(rewards))}")
-        logger.debug(f"Computed advantages ({config.advantage_type}): {lt.lovely(torch.tensor(advantages))}")
+        logger.debug(f"Computed rewards: {lt.lovely(rewards)}")
+        logger.debug(f"Computed advantages ({config.advantage_type}): {lt.lovely(advantages)}")
 
-        # compute batch metrics
-        num_prompt_tokens = sum(len(prompt_tokens[i]) for i in range(len(prompt_tokens)))
-        num_completion_tokens = sum(len(completion_tokens[i]) for i in range(len(completion_tokens)))
-        num_tokens = num_prompt_tokens + num_completion_tokens
-
+        # Compute throughput
+        prompt_lens = torch.tensor([len(p) for p in prompt_tokens]).float().reshape(-1, config.rollouts_per_prompt)
+        completion_lens = (
+            torch.tensor([len(c) for c in completion_tokens]).float().reshape(-1, config.rollouts_per_prompt)
+        )
+        seq_lens = prompt_lens + completion_lens
+        assert seq_lens.numel() == prompt_lens.numel() == completion_lens.numel() == config.batch_size
+        num_tokens = seq_lens.sum().item()
         progress.total_tokens += num_tokens
         progress.total_samples += config.batch_size
         progress.total_problems += config.batch_size // config.rollouts_per_prompt
         throughput = num_tokens / (generate_completions_time)
 
-        seq_lens = np.array([len(p) + len(c) for p, c in zip(prompt_tokens, completion_tokens)])
-        problem_seqlens = seq_lens.reshape(-1, config.rollouts_per_prompt).mean(axis=-1)
-
-        # Compute solve all/ none and critical batch size
+        # Compute solve all/ none and effective batch size
         grouped_rewards = [
             rewards[i : i + config.rollouts_per_prompt] for i in range(0, len(rewards), config.rollouts_per_prompt)
         ]
@@ -302,8 +302,8 @@ async def orchestrate(config: OrchestratorConfig):
                 step=progress.step,
             )
             monitor.wandb.log_distributions(
-                rewards,
-                advantages,
+                rewards.tolist(),
+                advantages.tolist(),
                 rollouts_per_problem=config.rollouts_per_prompt,
                 step=progress.step,
             )
@@ -331,11 +331,14 @@ async def orchestrate(config: OrchestratorConfig):
 
         # Log step metrics
         step_time = time.time() - step_start_time
-        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Reward: {np.mean(rewards):.2f} | Throughput: {throughput:.1f} tokens/s | Seq. Length: {float(problem_seqlens.mean()):.1f} tokens/sample"
+        step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Reward: {rewards.mean().item():.4f} | Throughput: {throughput:.1f} tokens/s | Seq. Length: {seq_lens.mean().item():.1f} tokens/sample"
         logger.success(step_message)
 
         # Log progress metrics to monitor
         progress_metrics = {
+            "progress/tokens": num_tokens,
+            "progress/samples": config.batch_size,
+            "progress/problems": config.batch_size // config.rollouts_per_prompt,
             "progress/total_tokens": progress.total_tokens,
             "progress/total_samples": progress.total_samples,
             "progress/total_problems": progress.total_problems,
@@ -344,19 +347,34 @@ async def orchestrate(config: OrchestratorConfig):
         }
         monitor.log(progress_metrics)
 
-        # Log sequence length metrics to monitor
-        seq_metrics = {
-            "seq/len": float(problem_seqlens.mean()),
-            "seq/len/max": float(problem_seqlens.max()),
-            "seq/len/min": float(problem_seqlens.min()),
-            "seq/len/std": float(problem_seqlens.std()),
+        # Log sequence lengths to monitor
+        seq_len_metrics = {
+            "seq_len/mean": seq_lens.mean(-1).mean().item(),
+            "seq_len/max": seq_lens.mean(-1).max().item(),
+            "seq_len/min": seq_lens.mean(-1).min().item(),
             "step": progress.step,
         }
-        monitor.log(seq_metrics)
+        monitor.log(seq_len_metrics)
+
+        prompt_len_metrics = {
+            "prompt_len/mean": prompt_lens.mean(-1).mean().item(),
+            "prompt_len/max": prompt_lens.mean(-1).max().item(),
+            "prompt_len/min": prompt_lens.mean(-1).min().item(),
+            "step": progress.step,
+        }
+        monitor.log(prompt_len_metrics)
+
+        completion_len_metrics = {
+            "completion_len/mean": completion_lens.mean(-1).mean().item(),
+            "completion_len/max": completion_lens.mean(-1).max().item(),
+            "completion_len/min": completion_lens.mean(-1).min().item(),
+            "step": progress.step,
+        }
+        monitor.log(completion_len_metrics)
 
         # Log performance metrics to monitor
         perf_metrics = {
-            "perf/infer/throughput": throughput,
+            "perf/throughput": throughput,
             "perf/problem_requests": problem_requests,
             "perf/completion_requests": completion_requests,
             "perf/calls_to_generate": calls_to_generate,
@@ -364,24 +382,31 @@ async def orchestrate(config: OrchestratorConfig):
         }
         monitor.log(perf_metrics)
 
-        # Log rewards metrics to monitor
+        # Log reward and advantage metrics to monitor
+        assert advantages.numel() == rewards.numel() == config.batch_size
         reward_metrics = {
-            "reward/reward": np.mean(rewards),
-            "reward/solve_none": solve_none,
-            "reward/solve_all": solve_all,
-            "reward/effective_batch_size": effective_batch_size,
+            "reward/mean": rewards.mean().item(),
             "step": progress.step,
         }
         monitor.log(reward_metrics)
 
+        # Log rewards metrics to monitor
+        solve_metrics = {
+            "batch/solve_none": solve_none,
+            "batch/solve_all": solve_all,
+            "batch/effective_batch_size": effective_batch_size,
+            "step": progress.step,
+        }
+        monitor.log(solve_metrics)
+
         # Log time metrics to monitor
         time_metrics = {
-            "time/orchestrator": step_time,
-            "time/orchestrator/wait_for_weight_ckpt": wait_for_weight_ckpt_time,
-            "time/orchestrator/generate_completions": generate_completions_time,
-            "time/orchestrator/reload_weights": reload_weights_time,
-            "time/orchestrator/save_ckpt": save_ckpt_time,
-            "time/orchestrator/eval": eval_time,
+            "time/step": step_time,
+            "time/wait_for_weight_ckpt": wait_for_weight_ckpt_time,
+            "time/generate_completions": generate_completions_time,
+            "time/reload_weights": reload_weights_time,
+            "time/save_ckpt": save_ckpt_time,
+            "time/eval": eval_time,
             "step": progress.step,
         }
         monitor.log(time_metrics)
