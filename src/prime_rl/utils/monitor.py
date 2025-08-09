@@ -209,6 +209,8 @@ class WandbMonitor(Monitor):
             task_rewards: Optional list of task-specific rewards
             step: Current training step
         """
+        if not self.is_master:
+            return
         if (
             not self.config.log_extras
             or not self.config.log_extras.samples
@@ -271,6 +273,8 @@ class WandbMonitor(Monitor):
         self.logger.debug(f"Logged samples at step {step} to W&B table in {time.time() - start_time:.2f}s")
 
     def log_distributions(self, distributions: dict[str, list[float]], step: int) -> None:
+        if not self.is_master:
+            return
         if (
             not self.config.log_extras
             or not self.config.log_extras.distributions
@@ -302,6 +306,8 @@ class WandbMonitor(Monitor):
 
     def log_final_samples(self) -> None:
         """Log final samples to W&B table."""
+        if not self.is_master:
+            return
         if not self.config.log_extras or not self.config.log_extras.samples:
             return
         self.logger.debug("Logging final samples to W&B table")
@@ -311,6 +317,8 @@ class WandbMonitor(Monitor):
 
     def log_final_distributions(self) -> None:
         """Log final distributions to W&B table."""
+        if not self.is_master:
+            return
         if not self.config.log_extras or not self.config.log_extras.distributions:
             return
         self.logger.debug("Logging final distributions to W&B table")
