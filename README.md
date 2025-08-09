@@ -82,7 +82,7 @@ uv run inference @ configs/debug/infer.toml
 uv run orchestrator @ configs/debug/orch.toml
 ```
 
-5. Check that you can run a toy RL run (*this requires 2 GPUs and lasts 5min, see more below*)
+5. Check that you can run a toy RL run (*this requires 2 GPUs and lasts 5 min, see more below*)
 
 ```bash
 uv run rl \
@@ -128,7 +128,7 @@ Then, paste the experiment entrypoints detailed below in the `Trainer` pane to s
 
 ### Single Node Training
 
-We provide a convenience endpoint `rl` for single-node RL experiments. It configures and starts the trainer, orchestrator and, optionally, an inference server. It enforces correctly setting shared configs (e.g. the model name or async level should be the same across all modules) and dispatches and monitors subprocesses. To stream the logs from each module we use file logging. By default, only the trainer logs will be displayed on the main process (*use the tmux layout script to conveniently view all logs*).
+We provide a convenience endpoint `rl` for single-node RL experiments. It configures and starts the trainer, orchestrator and, optionally, an inference server. It allows setting shared configs conveniently (e.g. the model name or async level should be the same across all modules) and dispatches and monitors subprocesses. To stream the logs from each module we use file logging. By default, only the trainer logs will be displayed on the main process (*use the tmux layout script to conveniently view all logs*).
 
 To check all available configuration options, run `uv run rl --help`.
 
@@ -143,7 +143,7 @@ uv run rl \
   --inference @ configs/reverse_text/infer.toml
 ```
 
-*With two small GPUs (e.g. RTX 3090/ 4090), this experiment should finish in less than 5 minutes.*
+*With two small GPUs (e.g. RTX 3090/4090), this experiment should finish in less than 5 minutes.*
 
 **Hendrycks Math**
 
@@ -206,7 +206,7 @@ bash scripts/tmux.sh exp-2
 
 ```bash
 # Start the second experiment
-CUDA_VISIBLE_DEVICES=3,4 uv run rl \
+CUDA_VISIBLE_DEVICES=2,3 uv run rl \
   --trainer @ configs/reverse_text/train.toml \
   --orchestrator @ configs/reverse_text/orch.toml \
   --inference @ configs/reverse_text/infer.toml \
@@ -258,7 +258,7 @@ We support the following sources for configuration, in this order of precedence:
 
 In general we recommend setting configurations via config files to define reproducible experiments and use command-line arguments to override the config values to run variants of the same experiment. Environment variables are usually only used in production settings to communicate with the [Prime Protocol](https://github.com/PrimeIntellect-ai/protocol) worker. In most cases, you should not need to use environment variables.
 
-The precendence order will be important if multiple sources try to configure the same argument. For example, in the following command, all sources will define a model name
+The precedence order will be important if multiple sources try to configure the same argument. For example, in the following command, all sources will define a model name
 
 ```toml
 # qwen8b.toml
@@ -282,7 +282,7 @@ In this example, the CLI argument `--model.name Qwen/Qwen3-32B` will take precen
 
 For development purposes it is useful start the inference server once and keep it alive across experiments to avoid suffering the vLLM startup time repeatedly. The recommended workflow is as follows:
 
-1. Start the pre-layouted tmux session using the tmux script
+1. Start the preconfigured tmux session using the tmux script
 
 ```bash
 bash scripts/tmux.sh
@@ -332,19 +332,72 @@ For quick API-based testing post-installation, do:
 uv run vf-eval vf-custom-environment # -h for config options; defaults to gpt-4.1-mini, 5 prompts, 3 rollouts each
 ```
 
-For training, create `trainer`/`inference`/`orchestrator` config files following the aforementioned examples, then set `id = vf-custom-environmment` in the `[environment]` section of your `orchestrator` config (along with any desired Environment-level args in `[environment.args]`).
+For training, create `trainer`/`inference`/`orchestrator` config files following the aforementioned examples, then set `id = vf-custom-environment` in the `[environment]` section of your `orchestrator` config (along with any desired Environment-level args in `[environment.args]`).
 
+### W&B
+
+For any serious run we recommend logging to W&B. Since it is disabled by default, you have to set up W&B. First, make sure that you are logged in.
+
+```bash
+uv run wandb login
+# Or set `export WANDB_API_KEY=...`
+```
+
+Both the trainer and orchestrator can log to W&B as separate runs using the `--monitor.wandb` subconfig. You can set the project (`--monitor.wandb.project`, defaults to `prime-rl`), run name (`--monitor.wandb.name`, defaults to `None` which will make W&B generate a name randomly), run ID (`--monitor.wandb.id`, defaults to `None`), the log directory (`--monitor.wandb.dir`, defaults to `logs`) and whether or not to run in offline mode (`--monitor.wandb.offline`, defaults to `False`). 
+
+First, start your inference server
+
+```bash
+uv run inference @ configs/reverse_text/infer.toml
+```
+
+Then, start the trainer and orchestrator with logging enabled.
+
+```bash
+CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/reverse_text/train.toml --monitor.wandb.project example-project --monitor.wandb.name trainer
+```
+
+```bash
+uv run orchestrator @ configs/reverse_text/orch.toml --monitor.wandb.project example-project --monitor.wandb.name orchestrator
+```
+
+Usually it will be more convenient to use the `rl` entrypoint. To setup W&B concisely, you can specify shared configs using the `--wandb` subconfig, e.g. the project (`--wandb.project`), run name (`--wandb.name`), directory (`--wandb.dir`) and offline mode (`--wandb.offline`). It will automatically share these configs to the trainer and orchestrator. For the run name, it will automatically suffix the specified name with `-trainer` and `-orchestrator` to clearly distinguish those runs.
+
+```bash
+uv run rl   \
+  --trainer @ configs/reverse_text/train.toml  \
+  --orchestrator @ configs/reverse_text/orch.toml \
+  --inference @ configs/reverse_text/infer.toml \
+  --wandb.project example-project \
+  --wandb.name example-run
+```
+
+We support logging samples (e.g. prompt, completion, reward, advantage for selected rollouts) and distributions (e.g. reward, advantage, entropy distributions) as W&B tables using the `monitor.wandb.log-extras` subconfig. On the orchestrator you can log activate logging samples (`--monitor.wandb.log-extras.samples`) and distributions (`--monitor.wandb.log-extras.samples`). On the trainer you can only log distributions (`--monitor.wandb.log-extras.distributions`). On both, you can specify the logging step interval using `--monitor.wandb.log-extras.interval`. To log all extras on trainer and orchestrator every 10 steps, 
+
+```bash
+uv run rl   \
+  --trainer @ configs/reverse_text/train.toml  \
+  --orchestrator @ configs/reverse_text/orch.toml \
+  --inference @ configs/reverse_text/infer.toml \
+  --wandb.project example-project \
+  --wandb.name example-run \
+  --trainer.monitor.wandb.log-extras.distributions \
+  --trainer.monitor.wandb.log-extras.interval 10 \
+  --orchestrator.monitor.wandb.log-extras.samples \
+  --orchestrator.monitor.wandb.log-extras.distributions \
+  --orchestrator.monitor.wandb.log-extras.interval 10
+```
 
 ### Checkpointing
 
 Our codebase supports checkpointing. Because of the trainer/ orchestrator design, as well as the natural asynchrony checkpointing is non-standard.
 
 - Trainer (`src/prime_rl/trainer/ckpt.py`): Checkpoints FSDP model shard, optimizer state and progress (training step, total samples, total tokens)
-- Orchestrator (`src/prime_rl/trainer/ckpt.py`): Checkpoints orchestrator progress
+- Orchestrator (`src/prime_rl/orchestrator/ckpt.py`): Checkpoints orchestrator progress
 
 *NB: Each run with asynchrony level `async_level` and some checkpoint step `x`, requires weight checkpoints in the step range `[x-async_level, x]`. Currently we do not duplicate weight checkpoints into the `checkpoints` directory but simply keep them around in `weights`, by keeping the trainer from cleaning up weight checkpoints that are required for resuming training. This way, the orchestrator only needs to checkpoint its progress (read: step) to load the correct weights into the inference engine upon resuming.*
 
-The default checkpoint directory is `checkpoints` and each checkpoint step will live in a subdirectory enumerated by the step, i.e. `checkpoints/step_{step}`. The trainer checkpoint is called `trainer.pt` for single GPU workloads, else `trainer_{local_rank}.pt`. The orchestrator checkpoint is callec `orchestrator.pt`. Thus, this is a typical directory structure:
+The default checkpoint directory is `checkpoints` and each checkpoint step will live in a subdirectory enumerated by the step, i.e. `checkpoints/step_{step}`. The trainer checkpoint is called `trainer.pt` for single GPU workloads, else `trainer_{local_rank}.pt`. The orchestrator checkpoint is called `orchestrator.pt`. Thus, this is a typical directory structure:
 
 ```bash
 checkpoints
@@ -373,7 +426,7 @@ CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/reverse_text/train.toml --ckpt.i
 To resume a run use the `--ckpt.resume-step` flag. To resume from the checkpoint step 10 from the previous command, run the following command
 
 ```bash
-CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/reverse_text/train.toml --ckpt.resume_step 10
+CUDA_VISIBLE_DEVICES=1 uv run trainer @ configs/reverse_text/train.toml --ckpt.resume-step 10
 ```
 
 Because we save progress information, resuming from a checkpoint is fully W&B compatible. By default, resuming from a checkpoint, will simply create a new run. To resume the same W&B run, you'd have to pass the same W&B run ID for both the trainer and the orchestrator, e.g.
@@ -399,10 +452,9 @@ If you started your run using the rl.py script, you can resume the same run by p
 ```bash
 uv run rl \
   --trainer @ configs/reverse_text/train.toml \
-  --trainer.monitor.wandb.id <trainer-run-id> \
-  --trainer.ckpt.resume-step 10 \
   --orchestrator @ configs/reverse_text/orch.toml \
-  --orchestrator.ckpt.resume-step 10 \
+  --ckpt.resume-step 10 \
+  --trainer.monitor.wandb.id <trainer-run-id> \
   --orchestrator.monitor.wandb.id <orchestrator-run-id> 
 ```
 
