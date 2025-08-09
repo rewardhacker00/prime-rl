@@ -96,8 +96,6 @@ class OptimizerConfig(BaseConfig):
 class CheckpointConfig(BaseConfig):
     """Configures checkpointing the full model, optimizer and training state for resuming training."""
 
-    path: Annotated[Path, Field(description="Directory to write checkpoints to.")] = Path("checkpoints")
-
     interval: Annotated[int, Field(ge=1, description="Interval at which to save the checkpoint.")] = 50
 
     save_async: Annotated[
@@ -118,13 +116,6 @@ class CheckpointConfig(BaseConfig):
 
 class WeightCheckpointConfig(BaseConfig):
     """Configures checkpointing the model weights for updating the inference engines."""
-
-    path: Annotated[
-        Path,
-        Field(
-            description="Path to write weights to. Will write to `{path}/step_{step}` at every training step, which will be read by the orchestrator to update the inference engines.",
-        ),
-    ] = Path("weights")
 
     interval: Annotated[
         int | None,
@@ -185,8 +176,6 @@ class FakeDataLoaderConfig(BaseConfig):
 class DataLoaderConfig(BaseConfig):
     """Configures the data loader used for training."""
 
-    path: Annotated[Path, Field(description="Path to read rollouts from.")] = Path("rollouts")
-
     fake: Annotated[FakeDataLoaderConfig | None, Field(description="Whether to use a fake data loader.")] = None
 
 
@@ -216,6 +205,13 @@ class TrainerConfig(BaseSettings):
 
     # The monitor configuration
     monitor: MultiMonitorConfig = MultiMonitorConfig()
+
+    outputs_dir: Annotated[
+        Path,
+        Field(
+            description="Directory to write outputs to. Will be populated with checkpoints, weights, rollouts and logs as subdirectories. Should be set to a persistent directory with enough disk space. This value should be distinct across experiments running on a single node. See the README for more details."
+        ),
+    ] = Path("outputs")
 
     max_steps: Annotated[
         int | None,

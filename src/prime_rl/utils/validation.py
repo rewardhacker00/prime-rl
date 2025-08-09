@@ -19,10 +19,6 @@ def validate_shared_ckpt_config(
         raise ValueError(
             "Orchestrator checkpoint config is specified, but trainer checkpoint config is not. Please setup checkpointing on both for checkpointing to work properly."
         )
-    if trainer.ckpt and orchestrator.ckpt and trainer.ckpt.path != orchestrator.ckpt.path:
-        raise ValueError(
-            f"Trainer checkpoint path ({trainer.ckpt.path}) and orchestrator checkpoint path ({orchestrator.ckpt.path}) are not the same. Please specify the same checkpoint path for both."
-        )
     if trainer.ckpt and orchestrator.ckpt and trainer.ckpt.interval != orchestrator.ckpt.interval:
         raise ValueError(
             f"Trainer checkpoint interval ({trainer.ckpt.interval}) and orchestrator checkpoint interval ({orchestrator.ckpt.interval}) are not the same. Please specify the same checkpoint interval for both."
@@ -59,18 +55,13 @@ def validate_shared_max_model_len(
         )
 
 
-def validate_shared_paths(
+def validate_shared_outputs_dir(
     trainer: TrainerConfig,
     orchestrator: OrchestratorConfig,
 ) -> None:
-    if trainer.data.path != orchestrator.rollout_path:
+    if trainer.outputs_dir != orchestrator.outputs_dir:
         raise ValueError(
-            f"Trainer data path ({trainer.data.path}) and orchestrator rollout path ({orchestrator.rollout_path}) are not the same. Please specify the same path for both."
-        )
-
-    if trainer.weights.path != orchestrator.weights_path:
-        raise ValueError(
-            f"Trainer weights path ({trainer.weights.path}) and orchestrator weights path ({orchestrator.weights_path}) are not the same. Please specify the same path for both."
+            f"Trainer outputs directory ({trainer.outputs_dir}) and orchestrator outputs directory ({orchestrator.outputs_dir}) are not the same. Please specify the same outputs directory for both."
         )
 
 

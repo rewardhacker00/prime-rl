@@ -58,7 +58,7 @@ def train(config: TrainerConfig):
 
     # Setup the monitor
     logger.info(f"Initializing monitor ({config.monitor})")
-    monitor = setup_monitor(config.monitor, run_config=config)
+    monitor = setup_monitor(config.monitor, outputs_dir=config.outputs_dir, run_config=config)
 
     # TODO(Mika): Move this to typed env var
     # Allow eager fallback during production so that training runs don't die if compile fails
@@ -69,14 +69,13 @@ def train(config: TrainerConfig):
     torch.set_float32_matmul_precision("high")
     torch.cuda.set_device(world.rank)
 
-    if config.weights.path and world.rank == 0:
-        if envs.SHARDCAST_OUTPUT_DIR is not None:
-            logger.info(f"Initializing shardcast from {envs.SHARDCAST_OUTPUT_DIR}")
-            shardcast.initialize(
-                envs.SHARDCAST_OUTPUT_DIR,
-                # +1 to ensure to not delete current checkpoint when async_level=0
-                max_distribution_folders=config.async_level + 1,
-            )
+    if world.rank == 0 and envs.SHARDCAST_OUTPUT_DIR is not None:
+        logger.info(f"Initializing shardcast from {envs.SHARDCAST_OUTPUT_DIR}")
+        shardcast.initialize(
+            envs.SHARDCAST_OUTPUT_DIR,
+            # +1 to ensure to not delete current checkpoint when async_level=0
+            max_distribution_folders=config.async_level + 1,
+        )
 
     # Initialize the model and tokenizer
     logger.info(f"Initializing model and tokenizer ({config.model})")
@@ -99,10 +98,10 @@ def train(config: TrainerConfig):
 
     # Get checkpoint managers
     logger.info(f"Initializing weight checkpoint manager ({config.weights})")
-    weight_ckpt_manager = WeightCheckpointManager(config.weights, config.ckpt, config.async_level)
+    weight_ckpt_manager = WeightCheckpointManager(config.outputs_dir, config.weights, config.ckpt, config.async_level)
     if config.ckpt:
         logger.info(f"Initializing checkpoint manager ({config.ckpt})")
-        ckpt_manager = CheckpointManager(config.ckpt)
+        ckpt_manager = CheckpointManager(config.outputs_dir, config.ckpt)
 
     # Optionally, resume training from a checkpoint
     progress = Progress()
@@ -127,7 +126,7 @@ def train(config: TrainerConfig):
                 model_name_or_path = (
                     config.model.name
                     if not (config.ckpt and config.ckpt.resume_step)
-                    else config.weights.path / f"step_{step}"
+                    else weight_ckpt_manager._get_step_path(step)
                 )
                 model_config = deepcopy(config.model)
                 model_config.name = model_name_or_path
@@ -136,7 +135,7 @@ def train(config: TrainerConfig):
 
     # Set up the data loader (Optionally, use a fake data loader for debugging)
     logger.info(f"Initializing data loader ({config.data})")
-    dataloader = DataLoader(config.data.path, progress.step)
+    dataloader = DataLoader(config.outputs_dir, progress.step)
     if config.data.fake:
         dataloader = FakeDataLoader(config.data.fake)
 
