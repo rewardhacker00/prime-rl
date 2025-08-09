@@ -3,6 +3,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Optional
 
+# Monkeypatch vLLM Sampler before importing any vLLM modules
+# ruff: noqa: I001
+from prime_rl.inference.vllm.sampler import Sampler as CustomSampler
+
+import importlib
+
+setattr(importlib.import_module("vllm.v1.sample.sampler"), "Sampler", CustomSampler)
+
 import uvloop
 import vllm.envs as envs
 from fastapi import Request
@@ -117,6 +125,11 @@ def server(config: InferenceConfig, vllm_args: list[str]):
     parser = make_arg_parser(parser)
     args = parser.parse_args(args=vllm_args, namespace=config.to_vllm())
     validate_parsed_serve_args(args)
+
+    # Raise error if logprobs_mode is not set to processed_logprobs
+    if args.logprobs_mode != "processed_logprobs":
+        raise ValueError("logprobs_mode must be 'processed_logprobs' to be compatible with the orchestrator.")
+
     if args.headless or args.api_server_count < 1:
         run_headless(args)
     else:
