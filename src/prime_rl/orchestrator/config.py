@@ -333,7 +333,7 @@ class OrchestratorConfig(BaseSettings):
         ),
     ] = False
 
-    seed: Annotated[int | None, Field(description="Random seed for the orchestrator.")] = None
+    seed: Annotated[int | None, Field(description="Random seed for the orchestrator.")] = 42
 
     @model_validator(mode="after")
     def validate_batch_size(self):
