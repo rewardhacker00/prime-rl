@@ -243,7 +243,7 @@ class TrainerConfig(BaseSettings):
         Field(
             description="Whether to recompute the logprobs. If True, will always recompute logprobs and overwrite those found in the training batch.",
         ),
-    ] = True
+    ] = False
 
     bench: Annotated[
         bool,
