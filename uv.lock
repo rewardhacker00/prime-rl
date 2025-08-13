@@ -3268,7 +3268,7 @@ dependencies = [
 
 [[package]]
 name = "vf-alphabet-sort"
-version = "0.1.0"
+version = "0.1.3"
 source = { editable = "environments/vf_alphabet_sort" }
 dependencies = [
     { name = "verifiers" },
@@ -3279,7 +3279,7 @@ requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifi
 
 [[package]]
 name = "vf-ascii-tree"
-version = "0.1.0"
+version = "0.1.4"
 source = { editable = "environments/vf_ascii_tree" }
 dependencies = [
     { name = "verifiers" },
@@ -3305,7 +3305,7 @@ requires-dist = [
 
 [[package]]
 name = "vf-intellect-math"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "environments/vf_intellect_math" }
 dependencies = [
     { name = "verifiers" },
@@ -3316,7 +3316,7 @@ requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifi
 
 [[package]]
 name = "vf-pydantic-adherence"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "environments/vf_pydantic_adherence" }
 dependencies = [
     { name = "datasets" },
@@ -3333,7 +3333,7 @@ requires-dist = [
 
 [[package]]
 name = "vf-reverse-text"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "environments/vf_reverse_text" }
 dependencies = [
     { name = "verifiers" },
@@ -3344,7 +3344,7 @@ requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifi
 
 [[package]]
 name = "vf-skywork-math"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "environments/vf_skywork_math" }
 dependencies = [
     { name = "verifiers" },
@@ -3355,7 +3355,7 @@ requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifi
 
 [[package]]
 name = "vf-unscramble"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "environments/vf_unscramble" }
 dependencies = [
     { name = "datasets" },
