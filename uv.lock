@@ -3290,7 +3290,7 @@ requires-dist = [{ name = "verifiers", git = "https://github.com/willccbb/verifi
 
 [[package]]
 name = "vf-hendrycks-math"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "environments/vf_hendrycks_math" }
 dependencies = [
     { name = "datasets" },
