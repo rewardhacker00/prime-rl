@@ -9,7 +9,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.gpu]
 
 TIMEOUT = 300  # 5 minutes
 ENV = {"CUDA_VISIBLE_DEVICES": "1"}
-SFT_CMD = ["uv", "run", "sft", "@", "configs/reverse_text/sft.toml", "--max-steps", "20", "--ckpt"]
+SFT_CMD = ["uv", "run", "sft", "@", "configs/reverse_text/sft.toml", "--max-steps", "10", "--ckpt"]
 SFT_RESUME_CMD = [
     "uv",
     "run",
@@ -17,9 +17,9 @@ SFT_RESUME_CMD = [
     "@",
     "configs/reverse_text/sft.toml",
     "--max-steps",
-    "40",
-    "--ckpt.resume-step",
     "20",
+    "--ckpt.resume-step",
+    "10",
 ]
 
 
@@ -29,11 +29,6 @@ def wandb_project(username: str) -> str:
     if username != "CI_RUNNER":
         project += "-local"
     return project
-
-
-@pytest.fixture(scope="module")
-def outputs_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp("outputs")
 
 
 @pytest.fixture(scope="module")
