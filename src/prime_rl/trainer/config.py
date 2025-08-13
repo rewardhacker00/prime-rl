@@ -76,12 +76,11 @@ class CosineSchedulerConfig(BaseModel):
     ] = None
 
 
-SchedulerConfig: TypeAlias = ConstantSchedulerConfig | LinearSchedulerConfig | CosineSchedulerConfig
+SchedulerConfigType: TypeAlias = ConstantSchedulerConfig | LinearSchedulerConfig | CosineSchedulerConfig
 
 
-class OptimizerConfig(BaseConfig):
-    """Configures the Adam optimizer and learning rate scheduler."""
-
+class AdamWConfig(BaseModel):
+    type: Literal["adamw"] = "adamw"
     lr: Annotated[float, Field(ge=0)] = 4e-4
     weight_decay: Annotated[float, Field(ge=0)] = 0.01
     betas1: Annotated[float, Field(ge=0)] = 0.9
@@ -90,14 +89,29 @@ class OptimizerConfig(BaseConfig):
     # Gradient clipping
     max_norm: Annotated[float, Field(ge=0, description="Maximum gradient norm to clip.")] = 1.0
 
-    # LR Scheduler configuration
-    scheduler: SchedulerConfig = Field(discriminator="type", default=ConstantSchedulerConfig())
+
+class MuonConfig(BaseModel):
+    type: Literal["muon"] = "muon"
+    lr: Annotated[float, Field(ge=0)] = 4e-4
+    weight_decay: Annotated[float, Field(ge=0)] = 0.01
+
+    adam_betas1: Annotated[float, Field(ge=0)] = 0.9
+    adam_betas2: Annotated[float, Field(ge=0)] = 0.999
+
+
+OptimizerConfigType: TypeAlias = AdamWConfig | MuonConfig
 
 
 class CheckpointConfig(BaseConfig):
     """Configures checkpointing the full model, optimizer and training state for resuming training."""
 
-    interval: Annotated[int | None, Field(ge=1, description="Interval at which to save the checkpoint. If None, will only checkpoint at the end of training.")] = None
+    interval: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description="Interval at which to save the checkpoint. If None, will only checkpoint at the end of training.",
+        ),
+    ] = None
 
     save_async: Annotated[
         bool,
@@ -122,10 +136,17 @@ class CheckpointConfig(BaseConfig):
         ),
     ] = None
 
+
 class WeightCheckpointConfig(BaseConfig):
     """Configures checkpointing the model weights for updating the inference engines (RL trainer) or continued post-training (on SFT trainer)."""
 
-    interval: Annotated[int | None, Field(ge=1, description="Interval at which to save the weights. If None, will only keep necessary weight checkpoints for resuming training.")] = None
+    interval: Annotated[
+        int | None,
+        Field(
+            ge=1,
+            description="Interval at which to save the weights. If None, will only keep necessary weight checkpoints for resuming training.",
+        ),
+    ] = None
 
     save_async: Annotated[
         bool,
