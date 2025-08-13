@@ -1,5 +1,3 @@
-import logging
-import os
 import time
 from copy import deepcopy
 
@@ -9,14 +7,13 @@ from prime_rl.trainer import envs
 
 import shardcast
 import torch
-from torch._guards import log as torch_log
 from loguru import logger
 from prime_rl.trainer.ckpt import CheckpointManager, Progress
 from prime_rl.trainer.weights import WeightCheckpointManager
-from prime_rl.trainer.config import TrainerConfig
-from prime_rl.trainer.data import DataLoader, FakeDataLoader
+from prime_rl.trainer.rl.config import RLTrainerConfig
+from prime_rl.trainer.rl.data import DataLoader, FakeDataLoader
 from prime_rl.trainer.logger import setup_logger
-from prime_rl.trainer.loss import (
+from prime_rl.trainer.rl.loss import (
     compute_loss,
     shift_logits,
     selective_log_softmax,
@@ -46,11 +43,11 @@ from prime_rl.utils.utils import clean_exit, to_col_format
 
 @clean_exit
 @logger.catch(reraise=True)
-def train(config: TrainerConfig):
+def train(config: RLTrainerConfig):
     # Setup world and logger
     world = get_world()
     logger = setup_logger(config.log, world)
-    logger.info(f"Starting trainer in {world}")
+    logger.info(f"Starting RL trainer in {world}")
 
     # Print warning if running in benchmark mode
     if config.bench:
@@ -60,12 +57,7 @@ def train(config: TrainerConfig):
     logger.info(f"Initializing monitor ({config.monitor})")
     monitor = setup_monitor(config.monitor, outputs_dir=config.outputs_dir, run_config=config)
 
-    # TODO(Mika): Move this to typed env var
-    # Allow eager fallback during production so that training runs don't die if compile fails
-    if "ZERO_BAND_DEV" not in os.environ:
-        torch_log.setLevel(logging.CRITICAL)
-        torch._dynamo.config.suppress_errors = True
-
+    # Set precision and cuda device
     torch.set_float32_matmul_precision("high")
     torch.cuda.set_device(world.rank)
 
@@ -287,16 +279,16 @@ def train(config: TrainerConfig):
             loss.backward()
 
             # Add relevant tensors to tensor dict for logging purposes
-            tensors["probs"].append(torch.exp(logprobs)[loss_mask.bool()].detach().to("cpu"))
-            tensors["old_probs"].append(torch.exp(old_logprobs)[loss_mask.bool()].detach().to("cpu"))
-            tensors["entropy"].append(entropy[loss_mask.bool()].detach().to("cpu"))
+            tensors["probs"].append(torch.exp(logprobs)[loss_mask].detach().to("cpu"))
+            tensors["old_probs"].append(torch.exp(old_logprobs)[loss_mask].detach().to("cpu"))
+            tensors["entropy"].append(entropy[loss_mask].detach().to("cpu"))
             tensors["recomputed_logprob_error"].append(
-                recomputed_logprob_errors[micro_step][loss_mask.bool()].detach().to("cpu")
+                recomputed_logprob_errors[micro_step][loss_mask].detach().to("cpu")
             )
 
             # Add loss tensors to tensor dict for logging purposes
             for key, loss_tensor in loss_tensors.items():
-                loss_tensor = loss_tensor.detach()[loss_mask.bool()].detach().to("cpu")
+                loss_tensor = loss_tensor.detach()[loss_mask].detach().to("cpu")
                 tensors[key].append(loss_tensor)
 
             # Debug log with *local, micro step* stats
@@ -305,8 +297,8 @@ def train(config: TrainerConfig):
             )
 
         # Optionally, clip the gradients
-        logger.debug(f"Clipping gradients to {config.loss.max_norm}")
-        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.loss.max_norm).full_tensor()
+        logger.debug(f"Clipping gradients to {config.optim.max_norm}")
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=config.optim.max_norm).full_tensor()
 
         # Update the model parameters
         optimizer.step()
@@ -410,7 +402,7 @@ def train(config: TrainerConfig):
         ckpt_manager.save(model, [optimizer], scheduler, progress, step=progress.step)
 
     logger.info(f"Peak memory: {torch.cuda.max_memory_allocated() / 1024**3:.2f} GB")
-    logger.success("Trainer finished!")
+    logger.success("RL trainer finished!")
 
     # Optionally, print benchmark table
     if config.bench:
@@ -418,7 +410,7 @@ def train(config: TrainerConfig):
 
 
 def main():
-    train(parse_argv(TrainerConfig))
+    train(parse_argv(RLTrainerConfig))
 
 
 if __name__ == "__main__":

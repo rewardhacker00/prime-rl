@@ -4,7 +4,7 @@ from jaxtyping import Float, Int, jaxtyped
 from torch import Tensor
 from torch.nn import functional as F
 
-from prime_rl.trainer.config import LossConfig
+from prime_rl.trainer.rl.config import LossConfig
 
 
 @jaxtyped(typechecker=typechecker)
