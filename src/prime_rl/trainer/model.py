@@ -28,7 +28,7 @@ def get_model(config: ModelConfig) -> Model:
     return model
 
 
-def get_tokenizer(config: ModelConfig) -> AutoTokenizer:
+def setup_tokenizer(config: ModelConfig) -> AutoTokenizer:
     tokenizer = AutoTokenizer.from_pretrained(config.name)
     tokenizer.pad_token_id = tokenizer.eos_token_id
     return tokenizer
