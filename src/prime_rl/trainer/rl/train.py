@@ -52,7 +52,7 @@ def train(config: RLTrainerConfig):
 
     # Print warning if running in benchmark mode
     if config.bench:
-        logger.warning(f"Running in benchmark mode (max_steps={config.max_steps}, {config.data.fake=})")
+        logger.warning(f"Running in benchmark mode (max_steps={config.max_steps})")
 
     # Setup the monitor
     logger.info(f"Initializing monitor ({config.monitor})")

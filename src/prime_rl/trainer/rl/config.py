@@ -135,6 +135,10 @@ class RLTrainerConfig(BaseSettings):
             self.max_steps = 4  # 1 Warmup + 3 Benchmark
             if not self.data.fake:
                 self.data.fake = FakeDataLoaderConfig()
+            if self.monitor.wandb: # Do not log extras
+                self.monitor.wandb.log_extras = None
+            if self.ckpt: # Do not checkpoint
+                self.ckpt = None
         return self
 
     @model_validator(mode="after")

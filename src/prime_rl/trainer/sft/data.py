@@ -34,24 +34,28 @@ class FakeDataset(IterableDataset):
 
     def __init__(self, tokenizer: PreTrainedTokenizer, config: DataConfig):
         self.config = config
+        assert self.config.fake is not None, "Fake dataset must be specified"
+        self.fake_type = self.config.fake
         self.vocab_size = tokenizer.vocab_size
 
     def __iter__(self) -> Iterator[Sample]:
         while True:
-            rand_seq_len = int(torch.randint(1, self.config.seq_len + 1, (1,)).item())
-            # simulate different sequence lengths
-            input_ids = torch.randint(0, self.vocab_size, (rand_seq_len + 1,)).long().tolist()
-            position_ids = torch.arange(len(input_ids)).long()
-            loss_mask = torch.ones(len(input_ids)).bool()
-            loss_mask[-1] = False
+            seq_len = (
+                int(torch.randint(0, self.config.seq_len, (1,)).item())
+                if self.fake_type == "variable"
+                else self.config.seq_len
+            )
+            input_ids = torch.randint(0, self.vocab_size, (seq_len + 1,)).long().tolist()
+            position_ids = list(range(self.config.seq_len))
+            loss_mask = [True] * self.config.seq_len
             fake_sample = {
-                "input_ids": input_ids,
+                "input_ids": input_ids[:-1],
+                "target_ids": input_ids[1:],
                 "position_ids": position_ids,
                 "loss_mask": loss_mask,
-                "target_ids": input_ids[1:] + [0],
                 "epoch": 0,
             }
-            return fake_sample
+            yield fake_sample
 
 
 class SFTDataset(IterableDataset):
@@ -62,7 +66,9 @@ class SFTDataset(IterableDataset):
         self._logger = get_logger()
 
         # Load dataset
-        self.dataset: Dataset = concatenate_datasets([load_dataset(config.name, split=split) for split in config.splits])
+        self.dataset: Dataset = concatenate_datasets(
+            [load_dataset(config.name, split=split) for split in config.splits]
+        )
 
         # Assert that the dataset has a 'text' column
         if "prompt" not in self.dataset.column_names or "completion" not in self.dataset.column_names:
@@ -189,10 +195,12 @@ class PaddingDataset(IterableDataset):
 
 def collate(samples: list[Sample]) -> Batch:
     return {
-        "input_ids": torch.stack([torch.tensor(sample["input_ids"]) for sample in samples], dim=0).long(),
-        "position_ids": torch.stack([torch.tensor(sample["position_ids"]) for sample in samples], dim=0).long(),
-        "loss_mask": torch.stack([torch.tensor(sample["loss_mask"]) for sample in samples], dim=0).bool(),
-        "target_ids": torch.stack([torch.tensor(sample["target_ids"]) for sample in samples], dim=0).long(),
+        "input_ids": torch.stack([torch.tensor(sample["input_ids"]) for sample in samples], dim=0).long().to("cuda"),
+        "position_ids": torch.stack([torch.tensor(sample["position_ids"]) for sample in samples], dim=0)
+        .long()
+        .to("cuda"),
+        "loss_mask": torch.stack([torch.tensor(sample["loss_mask"]) for sample in samples], dim=0).bool().to("cuda"),
+        "target_ids": torch.stack([torch.tensor(sample["target_ids"]) for sample in samples], dim=0).long().to("cuda"),
         "epoch": min([sample["epoch"] for sample in samples]),
     }
 

@@ -513,7 +513,7 @@ uv run orchestrator @ configs/reverse_text/orch.toml --bench
 
 **Trainer**
 
-To benchmark the trainer, simply run the trainer against a fake data loader matching the way the orchestrator would write the training batch.
+To benchmark the RL trainer, simply run the trainer against a fake data loader with batch certain specifications.
 
 ```bash
 uv run trainer @ configs/reverse_text/train.toml --bench --data.fake.micro_batch_size 8 --data.fake.batch_size 128 --data.fake.seq_len 128
@@ -521,13 +521,22 @@ uv run trainer @ configs/reverse_text/train.toml --bench --data.fake.micro_batch
 
 **RL**
 
-Often it will be most convenient to benchmark the full RL run. This will automatically set the training batch configuration to match the way the orchestrator would have written it.
+You can benchmark both the RL trainer and inference at the same time with the `rl.py` entrypoint. Note, that the benchmarking is still decoupled.
 
 ```bash
 uv run rl   \
   --trainer @ configs/reverse_text/train.toml  \
   --orchestrator @ configs/reverse_text/orch.toml \
-  --inference @ configs/reverse_text/infer.toml
+  --inference @ configs/reverse_text/infer.toml \
+  --bench
+```
+
+**SFT**
+
+Benchmark the SFT trainer against `fixed` or `variable` length fake data by specifyin `--data.fake.type`
+
+```bash
+uv run sft --bench --data.fake.type fixed --data.micro-batch-size 8 --data.batch-size 8 --data.seq-len 128
 ```
 
 ### Tests

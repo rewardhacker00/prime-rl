@@ -29,7 +29,12 @@ class DataConfig(BaseConfig):
     seq_len: Annotated[int, Field(ge=1)] = 128
     shuffle: Annotated[bool, Field(description="Whether to shuffle the dataset at the beginning of each epoch.")] = True
 
-    fake: Annotated[bool, Field(description="Whether to use a fake dataset.")] = False
+    fake: Annotated[
+        Literal["fixed", "variable"] | None,
+        Field(
+            description="How to generate fake data, mostly used for benchmarking. If fixed, each fake sample will be of length `seq_len`. If variable, each fake sample will be of length `seq_len` with uniform distribution from [0,seq_len]. If None, will use the regular dataset."
+        ),
+    ] = None
 
     @model_validator(mode="after")
     def validate_batch_size(self):
@@ -38,6 +43,16 @@ class DataConfig(BaseConfig):
         if self.batch_size < self.micro_batch_size:
             raise ValueError("Batch size must be greater than or equal to micro batch size")
         return self
+
+    def __str__(self):
+        if self.fake:
+            data_str = f"fake={self.fake}"
+        else:
+            data_str = (
+                f"name={self.name}, splits={self.splits}, collate_mode={self.collate_mode}, shuffle={self.shuffle}"
+            )
+
+        return f"{data_str}, micro_batch_size={self.micro_batch_size}, batch_size={self.batch_size}, seq_len={self.seq_len}"
 
 
 class SFTTrainerConfig(BaseSettings):
@@ -92,8 +107,10 @@ class SFTTrainerConfig(BaseSettings):
     def auto_setup_bench(self):
         if self.bench:
             self.max_steps = 4  # 1 Warmup + 3 Benchmark
-            if not self.data.fake:
-                self.data.fake = True
+            if self.monitor.wandb:  # Do not log extras
+                self.monitor.wandb.log_extras = None
+            if self.ckpt:  # Do not checkpoint
+                self.ckpt = None
         return self
 
     @model_validator(mode="after")

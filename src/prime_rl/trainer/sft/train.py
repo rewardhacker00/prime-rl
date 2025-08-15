@@ -39,7 +39,7 @@ def train(config: SFTTrainerConfig):
 
     # Print warning if running in benchmark mode
     if config.bench:
-        logger.warning(f"Running in benchmark mode (max_steps={config.max_steps}, {config.data.fake=})")
+        logger.warning(f"Running in benchmark mode (max_steps={config.max_steps})")
 
     # Setup the monitor
     logger.info(f"Initializing monitor ({config.monitor})")
@@ -83,13 +83,8 @@ def train(config: SFTTrainerConfig):
     )
 
     # Set up the dataset and dataloader (optionaly, use a fake dataset for debugging)
-    logger.info(f"Initializing dataset (name={config.data.name}, splits={config.data.splits})")
+    logger.info(f"Initializing data ({config.data})")
     dataset = setup_dataset(tokenizer, config.data)
-
-    # Set up the dataloader over micro batches
-    logger.info(
-        f"Initializing dataloader (micro_batch_size={config.data.micro_batch_size}, batch_size={config.data.batch_size}, collate_mode={config.data.collate_mode})"
-    )
     dataloader = iter(setup_dataloader(dataset, tokenizer, config.data))
 
     logger.info(f"Starting training loop ({config.max_steps=})")
@@ -273,7 +268,7 @@ def train(config: SFTTrainerConfig):
     logger.success("SFT trainer finished!")
 
     # Optionally, print benchmark table
-    if config.bench:
+    if config.bench and world.is_master:
         print_benchmark(to_col_format(monitor.history))
 
 

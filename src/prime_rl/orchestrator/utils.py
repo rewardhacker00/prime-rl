@@ -137,8 +137,8 @@ def print_benchmark(history: dict[str, list[Any]]) -> None:
     # Turn metric history into pd.DataFrame
     df = pd.DataFrame(dict(history.items()))
     columns = {
-        "perf/infer/throughput": "Throughput",
-        "time/orchestrator": "Step Time",
+        "perf/throughput": "Throughput",
+        "time/step": "Step Time",
     }
     df = df[columns.keys()].rename(columns=columns)
     df = df.iloc[1:]  # Exclude first row

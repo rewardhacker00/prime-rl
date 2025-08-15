@@ -17,7 +17,7 @@ from transformers import (
 )
 from transformers.tokenization_utils import PreTrainedTokenizer
 
-from prime_rl.trainer.config import ModelConfig
+from prime_rl.trainer.config import ActivationCheckpointConfig, ModelConfig
 
 Model: TypeAlias = LlamaForCausalLM | Qwen2ForCausalLM | Qwen3ForCausalLM
 
@@ -57,18 +57,18 @@ def reshard_module(model: nn.Module):
             module.reshard()
 
 
-def setup_ac(model: Model, config: ModelConfig) -> None:
-    if not config.ac:
-        return
-    for layer_id, transformer_block in model.model.layers.named_children():
-        transformer_block = checkpoint_wrapper(transformer_block, preserve_rng_state=False)
-        model.model.layers.register_module(layer_id, transformer_block)
+def apply_ac(model: Model, ac_config: ActivationCheckpointConfig):
+    for layer_id, (layer_name, transformer_block) in enumerate(model.model.layers.named_children()):
+        if layer_id % ac_config.freq == 0:
+            transformer_block = checkpoint_wrapper(transformer_block, preserve_rng_state=False)
+        model.model.layers.register_module(layer_name, transformer_block)
 
 
-def setup_model(config: ModelConfig) -> Model:
+def setup_model(config: ModelConfig) -> nn.Module:
     model = get_model(config)
     setup_fsdp(model, config)
-    setup_ac(model, config)
+    if config.ac is not None:
+        apply_ac(model, config.ac)
     if config.compile:
         model = torch.compile(model)
     # TODO: This should be type-hinted as FSDP version of the model
@@ -77,6 +77,6 @@ def setup_model(config: ModelConfig) -> Model:
 
 @jaxtyped(typechecker=typechecker)
 def forward(
-    model: Model, input_ids: Int[Tensor, "batch seq"], position_ids: Int[Tensor, "batch seq"]
+    model: nn.Module, input_ids: Int[Tensor, "batch seq"], position_ids: Int[Tensor, "batch seq"]
 ) -> Float[Tensor, "batch seq vocab"]:
     return model(input_ids=input_ids, position_ids=position_ids).logits.float()
