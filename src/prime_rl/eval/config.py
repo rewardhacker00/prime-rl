@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated
 
 from pydantic import Field
@@ -21,6 +22,13 @@ class OfflineEvalConfig(EvalConfig, BaseSettings):
 
     # The logging configuration
     log: LogConfig = LogConfig()
+
+    outputs_dir: Annotated[
+        Path,
+        Field(
+            description="Directory to write outputs to. Will be populated with artifacts such as reports and HF datasets as subdirectories. Should be set to a persistent directory with enough disk space."
+        ),
+    ] = Path("outputs")
 
     use_tqdm: Annotated[
         bool,

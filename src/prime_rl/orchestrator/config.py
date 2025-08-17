@@ -164,6 +164,13 @@ class EvalConfig(BaseConfig):
         description="Shared sampling configuration for evals; can differ from training sampling.",
     )
 
+    save: Annotated[
+        bool,
+        Field(
+            description="Whether to save the evaluation artifacts to the outputs directory.",
+        ),
+    ] = True
+
     @model_validator(mode="after")
     def _validate_and_fill_eval_lists(self):
         # If rollouts_per_example is empty, default to 1 for all ids

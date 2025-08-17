@@ -1,4 +1,6 @@
+import json
 import time
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -9,8 +11,8 @@ from verifiers import load_environment
 from prime_rl.orchestrator.config import EvalSamplingConfig, ModelConfig
 from prime_rl.orchestrator.utils import parse_completion_tokens
 from prime_rl.utils.logger import get_logger
-from prime_rl.utils.monitor import MultiMonitor
-from prime_rl.utils.utils import capitalize
+from prime_rl.utils.monitor import get_monitor
+from prime_rl.utils.utils import capitalize, get_eval_dir
 
 
 def compute_pass_at_k(rewards: list[int]) -> dict[str, float]:
@@ -26,12 +28,14 @@ async def run_eval(
     sampling_config: EvalSamplingConfig,
     num_examples: int,
     rollouts_per_example: int,
+    save: bool,
+    outputs_dir: Path,
     ckpt_step: int,
-    monitor: MultiMonitor,
     step: int | None = None,
 ) -> None:
     # Get the logger
     logger = get_logger()
+    monitor = get_monitor()
     assert logger is not None
     eval_start_time = time.time()
 
@@ -123,11 +127,11 @@ async def run_eval(
 
     # Log statistics
     eval_time = time.time() - eval_start_time
-    message = f"Evaluated {eval_id} in {eval_time:.2f}s (Avg@{k}={sample_stats.reward.mean():.2f}"
+    message = f"Evaluated {eval_id} in {eval_time:.2f}s (Avg@{k}={sample_stats.reward.mean():.4f}"
     if could_be_binary:
         assert pass_at_k is not None
         for pass_rate, pass_rate_score in pd.Series(pass_at_k.mean()).items():
-            message += f", {capitalize(str(pass_rate))}: {pass_rate_score:.2f}"
+            message += f", {capitalize(str(pass_rate))}: {pass_rate_score:.4f}"
     message += (
         f", Seq. Len: {avg_completion_len:.2f}, Max Seq. Len: {max_avg_completion_len:.2f}, "
         f"Min Seq. Len: {min_avg_completion_len:.2f}"
@@ -137,9 +141,6 @@ async def run_eval(
     # Log statistics to monitor
     eval_metrics = {
         f"avg@{k}": float(sample_stats.reward.mean()),
-        "completion_len": float(avg_completion_len),
-        "max_completion_len": float(max_avg_completion_len),
-        "min_completion_len": float(min_avg_completion_len),
     }
     if could_be_binary:
         assert pass_at_k is not None
@@ -159,3 +160,26 @@ async def run_eval(
         f"time/eval/{eval_id}/generate_and_score_rollouts": run_eval_time,
     }
     monitor.log(time_metrics)
+
+    # If specified, save eval artifacts
+    if save:
+        # Save samples as dataset
+        eval_dir = get_eval_dir(outputs_dir) / f"step_{ckpt_step}" / eval_id
+        dataset = vf_eval.make_dataset(results)
+        dataset.save_to_disk(eval_dir)
+
+        # Save "report"
+        # TODO: Make this into an actually nice report, for now just JSON-dump eval metrics
+        report_path = eval_dir / "report.json"
+        report = {
+            "metrics": eval_metrics,
+            "completion_len": {
+                "avg": float(avg_completion_len),
+                "max": float(max_avg_completion_len),
+                "min": float(min_avg_completion_len),
+            },
+        }
+        with open(report_path, "w") as f:
+            json.dump(report, f, indent=2)
+
+        logger.info(f"Saved samples and report to {eval_dir}")

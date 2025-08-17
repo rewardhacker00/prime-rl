@@ -180,7 +180,8 @@ async def orchestrate(config: OrchestratorConfig):
                         num_examples=num_examples,
                         rollouts_per_example=rollouts_per_example,
                         ckpt_step=ckpt_step,
-                        monitor=monitor,
+                        outputs_dir=config.outputs_dir,
+                        save=config.eval.save,
                         step=progress.step,
                     )
                     for eval_id, num_examples, rollouts_per_example in zip(
