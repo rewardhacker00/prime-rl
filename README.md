@@ -28,6 +28,7 @@ curl -sSL https://raw.githubusercontent.com/PrimeIntellect-ai/prime-rl/main/scri
 <summary>
 Manual Installation
 </summary>
+<br>
 
 1. Clone the repository
 
@@ -56,6 +57,7 @@ uv sync && uv sync --all-extras
 <summary>
 Validate your environment setup
 </summary>
+<br>
 
 1. Check that environment uses Python 3.12
 
