@@ -9,4 +9,4 @@ mask_truncated_completions = false
 name = "PrimeIntellect/Qwen3-0.6B-Reverse-Text-SFT"
 
 [environment]
-id = "vf-reverse-text"
+id = "reverse-text"

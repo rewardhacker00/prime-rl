@@ -11,14 +11,14 @@ name = "willcb/DeepSeek-R1-Distill-Qwen-7B"
 [monitor.wandb]
 
 [environment]
-id = "vf-hendrycks-math"
+id = "hendrycks-math"
 
 [monitor.wandb.log_extras]
 interval = 10
 
 [eval]
 interval = 50
-environment_ids = ["vf-math500", "vf-aime2024", "vf-aime2025"]
+environment_ids = ["math500", "aime2024", "aime2025"]
 rollouts_per_example = [1, 16, 16]
 
 [ckpt]

@@ -17,7 +17,7 @@ distributions = true
 interval = 2
 
 [environment]
-id = "vf-alphabet-sort"
+id = "alphabet-sort"
 
 [environment.args]
 min_turns = 2

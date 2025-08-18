@@ -124,7 +124,7 @@ class EvalSamplingConfig(BaseConfig):
 class EnvironmentConfig(BaseConfig):
     """Configures the environment to be used for inference."""
 
-    id: Annotated[str, Field(description="ID of the environment to use.")] = "vf-reverse-text"
+    id: Annotated[str, Field(description="ID of the environment to use.")] = "reverse-text"
     args: Annotated[dict, Field(description="Arguments to pass to the environment.")] = {}
 
 

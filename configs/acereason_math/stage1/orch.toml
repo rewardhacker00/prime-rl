@@ -14,14 +14,14 @@ name = "deepseek-ai/DeepSeek-R1-Distill-Qwen-7B"
 [monitor.wandb]
 
 [environment]
-id = "vf-acereason-math"
+id = "acereason-math"
 
 [monitor.wandb.log_extras]
 interval = 50
 
 [eval]
 interval = 50
-environment_ids = ["vf-math500", "vf-aime2024", "vf-aime2025"]
+environment_ids = ["math500", "aime2024", "aime2025"]
 rollouts_per_example = [1, 32, 32]
 
 [ckpt]
