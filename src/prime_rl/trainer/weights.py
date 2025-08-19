@@ -5,17 +5,75 @@ import warnings
 from pathlib import Path
 
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 from torch.distributed.checkpoint.state_dict import _get_fqns as get_fqns
 from torch.distributed.tensor import DTensor
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 from prime_rl.trainer.config import CheckpointConfig
-from prime_rl.trainer.model import Model
 from prime_rl.trainer.rl.config import WeightCheckpointConfig
 from prime_rl.trainer.world import get_world
 from prime_rl.utils.logger import get_logger
 from prime_rl.utils.utils import get_step_path, get_weight_ckpt_model_path, get_weights_dir
+
+
+def _has_tt_moe_layers(state_dict: dict[str, Tensor]) -> bool:
+    return any("mlp.router.gate" in i for i in state_dict.keys())
+
+
+def _get_max_layer_num(state_dict: dict[str, Tensor]) -> int:
+    return max(int(i.split(".")[2]) for i in state_dict.keys() if "model.layers." in i) + 1
+
+
+def _convert_tt_moe_to_hf_(state_dict: dict[str, Tensor]):
+    num_layers = _get_max_layer_num(state_dict)
+    for i in range(num_layers):
+        if not f"model.layers.{i}.mlp.router.gate.weight" in state_dict:
+            continue  # Not a TT-MoE layer
+
+        # Load balancing terms
+        if f"model.layers.{i}.mlp.expert_bias" in state_dict:
+            state_dict[f"model.layers.{i}.mlp.gate.e_score_correction_bias"] = state_dict[
+                f"model.layers.{i}.mlp.expert_bias"
+            ]
+            del state_dict[f"model.layers.{i}.mlp.expert_bias"]
+        if f"model.layers.{i}.mlp.tokens_per_expert" in state_dict:
+            del state_dict[f"model.layers.{i}.mlp.tokens_per_expert"]
+
+        # Shared experts
+        if f"model.layers.{i}.mlp.shared_expert.w1" in state_dict:
+            state_dict[f"model.layers.{i}.mlp.shared_experts.gate_proj.weight"] = state_dict[
+                f"model.layers.{i}.mlp.shared_expert.w1"
+            ][0]
+            state_dict[f"model.layers.{i}.mlp.shared_experts.down_proj.weight"] = state_dict[
+                f"model.layers.{i}.mlp.shared_expert.w2"
+            ][0]
+            state_dict[f"model.layers.{i}.mlp.shared_experts.up_proj.weight"] = state_dict[
+                f"model.layers.{i}.mlp.shared_expert.w3"
+            ][0]
+            del state_dict[f"model.layers.{i}.mlp.shared_expert.w1"]
+            del state_dict[f"model.layers.{i}.mlp.shared_expert.w2"]
+            del state_dict[f"model.layers.{i}.mlp.shared_expert.w3"]
+
+        # Gate / Router
+        state_dict[f"model.layers.{i}.mlp.gate.weight"] = state_dict[f"model.layers.{i}.mlp.router.gate.weight"]
+        del state_dict[f"model.layers.{i}.mlp.router.gate.weight"]
+
+        # Routed experts
+        num_experts, moe_dim, dim = state_dict[f"model.layers.{i}.mlp.experts.w1"].shape
+        for j in range(num_experts):
+            state_dict[f"model.layers.{i}.mlp.experts.{j}.gate_proj.weight"] = state_dict[
+                f"model.layers.{i}.mlp.experts.w1"
+            ][j]
+            state_dict[f"model.layers.{i}.mlp.experts.{j}.down_proj.weight"] = state_dict[
+                f"model.layers.{i}.mlp.experts.w2"
+            ][j]
+            state_dict[f"model.layers.{i}.mlp.experts.{j}.up_proj.weight"] = state_dict[
+                f"model.layers.{i}.mlp.experts.w3"
+            ][j]
+        del state_dict[f"model.layers.{i}.mlp.experts.w1"]
+        del state_dict[f"model.layers.{i}.mlp.experts.w2"]
+        del state_dict[f"model.layers.{i}.mlp.experts.w3"]
 
 
 class WeightCheckpointManager:
@@ -38,7 +96,7 @@ class WeightCheckpointManager:
     def _get_step_path(self, step: int) -> Path:
         return get_step_path(self.weights_dir, step)
 
-    def _gather_weights(self, model: Model, dtype: torch.dtype = torch.bfloat16) -> dict[str, Tensor]:
+    def _gather_weights(self, model: nn.Module, dtype: torch.dtype = torch.bfloat16) -> dict[str, Tensor]:
         """Gather distributed weights for weight checkpoint."""
         start_time = time.time()
         self._logger.debug("Gathering sharded weights")
@@ -68,7 +126,7 @@ class WeightCheckpointManager:
 
         return cpu_state
 
-    def _save_to_path(self, cpu_state: dict[str, Tensor], model: Model, tokenizer: PreTrainedTokenizer, step: int):
+    def _save_to_path(self, cpu_state: dict[str, Tensor], model: nn.Module, tokenizer: PreTrainedTokenizer, step: int):
         """Save weight checkpoint for given step."""
         step_path = self._get_step_path(step)
         step_path.mkdir(parents=True, exist_ok=True)
@@ -98,13 +156,15 @@ class WeightCheckpointManager:
 
     def save(
         self,
-        model: Model,
+        model: nn.Module,
         tokenizer: PreTrainedTokenizer,
         step: int,
         dtype: torch.dtype = torch.bfloat16,
     ):
         """Save a HF-compatible weight-only checkpoint for a given step."""
         cpu_state = self._gather_weights(model, dtype)
+        if _has_tt_moe_layers(cpu_state):
+            _convert_tt_moe_to_hf_(cpu_state)
 
         if self._is_master:
             if self.config.save_async:
