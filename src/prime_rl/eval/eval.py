@@ -7,6 +7,7 @@ from prime_rl.orchestrator.client import (
     check_health,
     reload_weights,
     setup_client,
+    update_weights,
 )
 from prime_rl.orchestrator.logger import setup_logger
 from prime_rl.utils.monitor import setup_monitor
@@ -46,26 +47,58 @@ async def eval(config: OfflineEvalConfig):
     await reload_weights(client)
 
     # Run benchmarks on base model
-    logger.info(f"Running evals on base model {config.model.name}")
-    await asyncio.gather(
-        *[
-            run_eval(
-                client=client,
-                eval_id=eval_id,
-                env_args=config.environment_args.get(eval_id, {}),
-                model_config=config.model,
-                sampling_config=config.sampling,
-                num_examples=num_examples,
-                rollouts_per_example=rollouts_per_example,
-                outputs_dir=config.outputs_dir,
-                save=config.save,
-                ckpt_step=0,
+    if config.eval_base:
+        logger.info(f"Running evals on base model {config.model.name}")
+        await asyncio.gather(
+            *[
+                run_eval(
+                    client=client,
+                    eval_id=eval_id,
+                    env_args=config.environment_args.get(eval_id, {}),
+                    model_config=config.model,
+                    sampling_config=config.sampling,
+                    num_examples=num_examples,
+                    rollouts_per_example=rollouts_per_example,
+                    outputs_dir=config.outputs_dir,
+                    save=config.save,
+                    ckpt_step=0,
+                )
+                for eval_id, num_examples, rollouts_per_example in zip(
+                    config.environment_ids, config.num_examples, config.rollouts_per_example
+                )
+            ]
+        )
+
+    # If specified, evaluate all checkpoints found in the weights directory
+    if config.weights_dir is not None:
+        logger.info(f"Evaluating weight checkpoints in {config.weights_dir}")
+        ckpt_steps = sorted([int(step_path.name.split("_")[-1]) for step_path in config.weights_dir.glob("step_*")])
+        logger.info(f"Found {len(ckpt_steps)} weight checkpoints (steps: {', '.join(map(str, ckpt_steps))})")
+        for ckpt_step in ckpt_steps[::-1]:
+            # Update the weights
+            logger.info(f"Evaluating weight checkpoint {ckpt_step}")
+            await update_weights(client, config.weights_dir, ckpt_step)
+
+            # Run evals on checkpoint
+            await asyncio.gather(
+                *[
+                    run_eval(
+                        client=client,
+                        eval_id=eval_id,
+                        env_args=config.environment_args.get(eval_id, {}),
+                        model_config=config.model,
+                        sampling_config=config.sampling,
+                        num_examples=num_examples,
+                        rollouts_per_example=rollouts_per_example,
+                        outputs_dir=config.outputs_dir,
+                        save=config.save,
+                        ckpt_step=ckpt_step,
+                    )
+                    for eval_id, num_examples, rollouts_per_example in zip(
+                        config.environment_ids, config.num_examples, config.rollouts_per_example
+                    )
+                ]
             )
-            for eval_id, num_examples, rollouts_per_example in zip(
-                config.environment_ids, config.num_examples, config.rollouts_per_example
-            )
-        ]
-    )
 
     logger.info("Evaluation finished!")
 
