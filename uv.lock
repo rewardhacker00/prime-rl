@@ -2228,7 +2228,7 @@ requires-dist = [
     { name = "pynvml", specifier = ">=12.0.0" },
     { name = "reverse-text", marker = "extra == 'vf'", url = "https://hub.primeintellect.ai/primeintellect/reverse-text/@latest/reverse_text-0.1.1-py2.py3-none-any.whl" },
     { name = "rich", specifier = ">=14.0.0" },
-    { name = "skywork-math", marker = "extra == 'vf'", url = "https://hub.primeintellect.ai/primeintellect/skywork-math/@latest/skywork_math-0.1.2-py2.py3-none-any.whl" },
+    { name = "skywork-math", marker = "extra == 'vf'", url = "https://hub.primeintellect.ai/primeintellect/skywork-math/@latest/skywork_math-0.1.3-py2.py3-none-any.whl" },
     { name = "textarena", specifier = ">=0.6.16" },
     { name = "tomli", specifier = ">=2.2.1" },
     { name = "tomli-w" },
@@ -3009,13 +3009,13 @@ wheels = [
 
 [[package]]
 name = "skywork-math"
-version = "0.1.2"
-source = { url = "https://hub.primeintellect.ai/primeintellect/skywork-math/@latest/skywork_math-0.1.2-py2.py3-none-any.whl" }
+version = "0.1.3"
+source = { url = "https://hub.primeintellect.ai/primeintellect/skywork-math/@latest/skywork_math-0.1.3-py2.py3-none-any.whl" }
 dependencies = [
     { name = "verifiers" },
 ]
 wheels = [
-    { url = "https://hub.primeintellect.ai/primeintellect/skywork-math/@latest/skywork_math-0.1.2-py2.py3-none-any.whl", hash = "sha256:80f2bcfcf257d68fc8151b2f3cdaa0029388f4e4bacff03592c69e72ca93533b" },
+    { url = "https://hub.primeintellect.ai/primeintellect/skywork-math/@latest/skywork_math-0.1.3-py2.py3-none-any.whl", hash = "sha256:e8e4c31de57b67f8da70f0ce6a2549e54c434768c401496eed618a3451bad38f" },
 ]
 
 [package.metadata]
