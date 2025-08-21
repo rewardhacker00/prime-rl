@@ -390,7 +390,7 @@ def train(config: RLTrainerConfig):
     logger.success("RL trainer finished!")
 
     # Optionally, print benchmark table
-    if config.bench:
+    if config.bench and world.is_master:
         print_benchmark(to_col_format(monitor.history))
 
 
