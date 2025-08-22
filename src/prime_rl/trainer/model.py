@@ -14,6 +14,7 @@ from transformers import (
 from transformers.tokenization_utils import PreTrainedTokenizer
 
 from prime_rl.trainer.config import ActivationCheckpointConfig, ModelConfig
+from prime_rl.utils.logger import get_logger
 
 
 def is_tt_moe_model(model: nn.Module) -> bool:
@@ -23,12 +24,18 @@ def is_tt_moe_model(model: nn.Module) -> bool:
 def get_load_balance_stats(model: nn.Module, reset_stats: bool = True) -> dict[str, torch.FloatTensor]:
     per_layer_max_vio = []
     for transformer_block in model.model.layers:
+        # This is necessary for models that have mixed dense layers
+        if not hasattr(transformer_block.mlp, "tokens_per_expert"):
+            continue
         tokens_per_expert = transformer_block.mlp.tokens_per_expert
         balanced_load = tokens_per_expert.mean()
         max_vio = (tokens_per_expert.max() - balanced_load) / balanced_load
         per_layer_max_vio.append(max_vio.item())
         if reset_stats:
             tokens_per_expert.zero_()
+    if len(per_layer_max_vio) == 0:
+        get_logger().warning("No load balance stats to report")
+        return {}
     return {"max_vio": torch.tensor(per_layer_max_vio)}
 
 
