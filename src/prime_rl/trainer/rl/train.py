@@ -24,6 +24,8 @@ from prime_rl.trainer.model import (
     setup_tokenizer,
     reshard_module,
     setup_model,
+    is_tt_moe_model,
+    get_load_balance_stats,
 )
 from prime_rl.trainer.perf import get_perf_counter
 from prime_rl.trainer.utils import (
@@ -274,15 +276,21 @@ def train(config: RLTrainerConfig):
                 recomputed_logprob_errors[micro_step][loss_mask].detach().to("cpu")
             )
 
+            if is_tt_moe_model(model):
+                load_balance_stats = get_load_balance_stats(model)
+                for k, v in load_balance_stats.items():
+                    tensors[k].append(v)
+
             # Add loss tensors to tensor dict for logging purposes
             for key, loss_tensor in loss_tensors.items():
                 loss_tensor = loss_tensor.detach()[loss_mask].detach().to("cpu")
                 tensors[key].append(loss_tensor)
 
             # Debug log with *local, micro step* stats
-            logger.debug(
-                f"Micro Step {micro_step} | Loss: {tensors['loss'][-1].mean().item():.4f} | Entropy: {tensors['entropy'][-1].mean().item():.4f} | Importance Ratio: {tensors['importance_ratio'][-1].mean().item():.4f}"
-            )
+            micro_step_message = f"Micro Step {micro_step} | Loss: {tensors['loss'][-1].mean().item():.4f} | Entropy: {tensors['entropy'][-1].mean().item():.4f} | Importance Ratio: {tensors['importance_ratio'][-1].mean().item():.4f}"
+            if "max_vio" in tensors:
+                micro_step_message += f" | Max Vio: {tensors['max_vio'][-1].mean().item():.4f}"
+            logger.debug(micro_step_message)
 
         # Optionally, clip the gradients
         logger.debug(f"Clipping gradients to {config.optim.max_norm}")
@@ -329,6 +337,8 @@ def train(config: RLTrainerConfig):
         step_time = time.time() - step_start_time
         current_lr = optimizer.param_groups[0]["lr"]
         step_message = f"Step {progress.step} | Time: {step_time:.2f}s | Loss: {tensor_stats['loss/mean']:.4f} | Entropy: {tensor_stats['entropy/mean']:.4f} | Importance Ratio: {tensor_stats['importance_ratio/mean']:.4f} | Grad. Norm: {grad_norm:.4f} | LR: {current_lr:.2e} | Throughput: {throughput:.0f} tokens/s | MFU: {mfu:.1f}%"
+        if "max_vio/mean" in tensor_stats:
+            step_message += f" | Max Vio: {tensor_stats['max_vio/mean']:.4f}"
         logger.success(step_message)
 
         # Log performance metrics

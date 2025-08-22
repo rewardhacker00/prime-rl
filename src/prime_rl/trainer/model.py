@@ -16,6 +16,22 @@ from transformers.tokenization_utils import PreTrainedTokenizer
 from prime_rl.trainer.config import ActivationCheckpointConfig, ModelConfig
 
 
+def is_tt_moe_model(model: nn.Module) -> bool:
+    return hasattr(model.config, "num_experts") or hasattr(model.config, "n_routed_experts")
+
+
+def get_load_balance_stats(model: nn.Module, reset_stats: bool = True) -> dict[str, torch.FloatTensor]:
+    per_layer_max_vio = []
+    for transformer_block in model.model.layers:
+        tokens_per_expert = transformer_block.mlp.tokens_per_expert
+        balanced_load = tokens_per_expert.mean()
+        max_vio = (tokens_per_expert.max() - balanced_load) / balanced_load
+        per_layer_max_vio.append(max_vio.item())
+        if reset_stats:
+            tokens_per_expert.zero_()
+    return {"max_vio": torch.tensor(per_layer_max_vio)}
+
+
 def get_model(config: ModelConfig) -> nn.Module:
     config_model = AutoConfig.from_pretrained(
         config.name, attn_implementation=config.attn, trust_remote_code=config.trust_remote_code
