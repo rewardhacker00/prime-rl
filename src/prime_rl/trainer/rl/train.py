@@ -16,7 +16,8 @@ from prime_rl.trainer.rl.loss import (
     shift_logits,
     selective_log_softmax,
     compute_entropy,
-    compute_packed_sequence_loss,
+    compute_loss,
+
 )
 from prime_rl.trainer.scheduler import setup_scheduler
 from prime_rl.trainer.model import (
@@ -35,6 +36,7 @@ from prime_rl.trainer.utils import (
     offload_model_to_cpu,
     wake_up_model_from_cpu,
     print_benchmark,
+    get_response_lengths,
 )
 from prime_rl.trainer.world import get_world
 from prime_rl.utils.monitor import setup_monitor
@@ -227,13 +229,9 @@ def train(config: RLTrainerConfig):
 
         # Normalize by the local number of unmasked tokens in the batch (per-batch length normalization)
         if config.loss.norm_type == "token":
-            loss_scale = torch.tensor(
-                sum(micro_batch["loss_mask"].sum().item() for micro_batch in micro_batches),
-                dtype=torch.float32,
-                device="cuda",
-            ).item()
+            loss_scale = sum(micro_batch["loss_mask"].sum().item() for micro_batch in micro_batches)
         elif config.loss.norm_type == "sequence":
-            loss_scale = float(batch_size)
+            loss_scale = batch_size
 
         logger.info(f"Starting forward and backward pass ({num_micro_batches=})")
         tensors = Tensors()  # Used to accumulate tensor statistics across micro-batches and ranks for logging
@@ -253,12 +251,12 @@ def train(config: RLTrainerConfig):
             logprobs = selective_log_softmax(shifted_logits, input_ids)
 
             # Compute loss
-            loss, loss_tensors = compute_packed_sequence_loss(
-                logprobs=logprobs.squeeze(0),
-                old_logprobs=old_logprobs.squeeze(0),
-                advantages=advantages.squeeze(0),
-                loss_mask=loss_mask.squeeze(0),
-                position_ids=position_ids.squeeze(0),
+            response_lengths = get_response_lengths(position_ids)
+            loss, loss_tensors = compute_loss(
+                logprobs=logprobs.squeeze().split(response_lengths),
+                old_logprobs=old_logprobs.squeeze().split(response_lengths),
+                advantages=advantages.squeeze().split(response_lengths),
+                loss_mask=loss_mask.squeeze().split(response_lengths),
                 loss_config=config.loss,
                 loss_scale=loss_scale,
             )
@@ -266,8 +264,7 @@ def train(config: RLTrainerConfig):
             # Compute entropy
             with torch.no_grad():
                 entropy = compute_entropy(shifted_logits)
-
-
+                
             # Delete logits and shifted_logits before backward pass to avoid memory spike
             del logits, shifted_logits
 

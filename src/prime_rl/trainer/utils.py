@@ -27,6 +27,7 @@ def get_response_lengths(position_ids: torch.Tensor) -> list[int]:
     Returns:
         List of sequence lengths
     """
+    position_ids = position_ids.flatten()
 
     boundaries = [0]  # Start of first sequence
 

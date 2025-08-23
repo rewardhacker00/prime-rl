@@ -1,89 +1,12 @@
+from typing import Any
+
 import torch
 from beartype import beartype as typechecker
-from jaxtyping import Bool, Float, Int, jaxtyped
+from jaxtyping import Float, Int, jaxtyped
 from torch import Tensor
 from torch.nn import functional as F
 
-from prime_rl.trainer.rl.config import LossConfigType
-from prime_rl.trainer.utils import get_response_lengths
-
-
-@jaxtyped(typechecker=typechecker)
-def compute_loss(
-    logprobs: Float[Tensor, "seq"],
-    old_logprobs: Float[Tensor, "seq"],
-    advantages: Float[Tensor, "seq"],
-    loss_config: LossConfigType,
-) -> tuple[Float[Tensor, "seq"], dict[str, Float[Tensor, "seq"]]]:
-    if loss_config.type == "clip":
-        return grpo_loss_clip(
-            logprobs=logprobs,
-            old_logprobs=old_logprobs,
-            advantages=advantages,
-            epsilon_low=loss_config.epsilon_low,
-            epsilon_high=loss_config.epsilon_high,
-            clip_ratio=loss_config.clip_ratio,
-        )
-    elif loss_config.type == "ratio":
-        return grpo_loss_ratio(
-            logprobs=logprobs,
-            old_logprobs=old_logprobs,
-            advantages=advantages,
-            clip_ratio=loss_config.clip_ratio,
-        )
-
-
-@jaxtyped(typechecker=typechecker)
-def grpo_loss_clip(
-    logprobs: Float[Tensor, "seq"],
-    old_logprobs: Float[Tensor, "seq"],
-    advantages: Float[Tensor, "seq"],
-    epsilon_low: float,
-    epsilon_high: float,
-    clip_ratio: float,
-) -> tuple[Float[Tensor, "seq"], dict[str, Float[Tensor, "seq"]]]:
-    assert logprobs.dtype == torch.float32, "logprobs must be float32"
-    assert old_logprobs.dtype == torch.float32, "old_logprobs must be float32"
-    assert advantages.dtype == torch.float32, "advantages must be float32"
-
-    # Compute the per-token loss
-    importance_ratio = torch.exp(logprobs - old_logprobs)
-    coef_1 = torch.clamp(importance_ratio, 0, clip_ratio)
-    coef_2 = torch.clamp(coef_1, 1 - epsilon_low, 1 + epsilon_high)
-    loss_1 = -coef_1 * advantages
-    loss_2 = -coef_2 * advantages
-    loss = torch.max(loss_1, loss_2)
-    is_clipped = (loss_1 < loss_2).float()
-
-    return loss, {
-        "coef_1": coef_1,
-        "coef_2": coef_2,
-        "is_clipped": is_clipped,
-    }
-
-
-@jaxtyped(typechecker=typechecker)
-def grpo_loss_ratio(
-    logprobs: Float[Tensor, "seq"],
-    old_logprobs: Float[Tensor, "seq"],
-    advantages: Float[Tensor, "seq"],
-    clip_ratio: float,
-) -> tuple[Float[Tensor, "seq"], dict[str, Float[Tensor, "seq"]]]:
-    assert logprobs.dtype == torch.float32, "logprobs must be float32"
-    assert old_logprobs.dtype == torch.float32, "old_logprobs must be float32"
-    assert advantages.dtype == torch.float32, "advantages must be float32"
-
-    # Compute the per-token loss
-    importance_ratio = torch.exp(logprobs - old_logprobs)
-    clipped_importance_ratio = torch.clamp(importance_ratio, 0, clip_ratio)
-    loss = -clipped_importance_ratio * advantages
-    is_clipped = (importance_ratio > clip_ratio).float()
-
-    return loss, {
-        "importance_ratio": importance_ratio,
-        "clipped_importance_ratio": clipped_importance_ratio,
-        "is_clipped": is_clipped,
-    }
+from prime_rl.trainer.rl.config import LossConfig
 
 
 @jaxtyped(typechecker=typechecker)
@@ -135,16 +58,15 @@ def shift_logits(logits: Float[Tensor, "batch seq vocab"]) -> Float[Tensor, "bat
     return logits
 
 
-@jaxtyped(typechecker=typechecker)
-def compute_packed_sequence_loss(
-    logprobs: Float[Tensor, "seq"],
-    old_logprobs: Float[Tensor, "seq"],
-    advantages: Float[Tensor, "seq"],
-    loss_mask: Bool[Tensor, "seq"],
-    position_ids: Int[Tensor, "seq"],
-    loss_config: LossConfigType,
-    loss_scale: float,
-) -> tuple[Float[Tensor, ""], dict[str, Float[Tensor, "seq"]]]:
+def compute_loss(
+    logprobs: Any,  # list of Float[Tensor, "seq_i"] with potentially different seq_i lengths
+    old_logprobs: Any,  # list of Float[Tensor, "seq_i"] with potentially different seq_i lengths
+    advantages: Any,  # list of Float[Tensor, "seq_i"] with potentially different seq_i lengths
+    loss_mask: Any,  # list of Bool[Tensor, "seq_i"] with potentially different seq_i lengths
+    loss_config: LossConfig,
+    loss_scale: int,
+) -> tuple[Float[Tensor, ""], dict[str, Any]]:
+
     """
     Compute loss for packed sequences (batch size = 1, multiple sequences packed along sequence dimension).
 
@@ -153,50 +75,51 @@ def compute_packed_sequence_loss(
         old_logprobs: Old log probabilities tensor for packed sequences
         advantages: Advantages tensor for packed sequences
         loss_mask: Loss mask tensor for packed sequences
-        response_lengths: Lengths of each individual sequence in the pack
         loss_config: Loss configuration object
         loss_scale: Scale factor to normalize the loss
 
     Returns:
         Tuple of (scaled_loss, aggregated_loss_tensors)
     """
-    response_lengths = get_response_lengths(position_ids)
-    # Split tensors by response lengths for per-sequence processing
-    logprobs_unpacked = logprobs.split(response_lengths)
-    old_logprobs_unpacked = old_logprobs.split(response_lengths)
-    advantages_unpacked = advantages.split(response_lengths)
-    loss_mask_unpacked = loss_mask.split(response_lengths)
 
     total_loss = 0
-    aggregated_loss_tensors = {}
+    total_importance_ratio = []
+    total_clipped_importance_ratio = []
+    total_is_clipped = []
 
-    for logprob, old_logprob, advantage, loss_mask in zip(
-        logprobs_unpacked, old_logprobs_unpacked, advantages_unpacked, loss_mask_unpacked
-    ):
-        per_sequence_loss, per_sequence_loss_tensors = compute_loss(
-            logprobs=logprob,
-            old_logprobs=old_logprob,
-            advantages=advantage,
-            loss_config=loss_config,
-        )
+    for logprobs, old_logprobs, advantages, loss_mask in zip(logprobs, old_logprobs, advantages, loss_mask):
+        log_importance_ratio = logprobs - old_logprobs
+
+        if loss_config.type == "gspo":
+            # https://arxiv.org/abs/2507.18071
+            seq_log_importance_ratio = (log_importance_ratio[loss_mask]).sum() / torch.clamp_min(loss_mask.sum(), 1)
+            log_importance_ratio = logprobs - logprobs.detach() + seq_log_importance_ratio.detach()
+            log_importance_ratio = torch.clamp(log_importance_ratio, max=10.0)
+
+        importance_ratio = torch.exp(log_importance_ratio)
+        clipped_importance_ratio = torch.clamp(importance_ratio, max=loss_config.clip_ratio)
+        loss = -clipped_importance_ratio * advantages
+        is_clipped = (importance_ratio > loss_config.clip_ratio).float()
 
         # Apply loss mask and sum
-        masked_loss = (per_sequence_loss[loss_mask]).sum()
+        loss = (loss[loss_mask]).sum()
 
         # Apply sequence-level normalization if configured
         if loss_config.norm_type == "sequence":
-            masked_loss = masked_loss / torch.clamp_min(loss_mask.sum(), 1)
+            loss = loss / torch.clamp_min(loss_mask.sum(), 1)
 
-        total_loss = total_loss + masked_loss
+        total_loss = total_loss + loss
 
         # Aggregate loss tensors
-        for key, per_sequence_loss_tensor in per_sequence_loss_tensors.items():
-            if key not in aggregated_loss_tensors:
-                aggregated_loss_tensors[key] = per_sequence_loss_tensor
-            else:
-                aggregated_loss_tensors[key] = torch.cat([aggregated_loss_tensors[key], per_sequence_loss_tensor])
+        total_importance_ratio.append(importance_ratio)
+        total_clipped_importance_ratio.append(clipped_importance_ratio)
+        total_is_clipped.append(is_clipped)
 
     # Apply loss scaling
-    scaled_loss = total_loss / loss_scale
+    scaled_loss = total_loss / min(loss_scale, 1)
 
-    return scaled_loss, aggregated_loss_tensors
+    return scaled_loss, {
+        "importance_ratio": torch.cat(total_importance_ratio),
+        "clipped_importance_ratio": torch.cat(total_clipped_importance_ratio),
+        "is_clipped": torch.cat(total_is_clipped),
+    }
