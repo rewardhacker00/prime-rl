@@ -157,6 +157,15 @@ async def run_eval(
     eval_metrics = {
         f"avg@{k}": float(sample_stats.reward.mean()),
     }
+
+    eval_completion_len_metrics = {
+        "avg": float(avg_completion_len),
+        "max": float(max_avg_completion_len),
+        "min": float(min_avg_completion_len),
+    }
+    eval_completion_len_metrics = {**{f"eval_completion_len/{eval_id}/{k}": v for k, v in eval_completion_len_metrics.items()}}
+    monitor.log(eval_completion_len_metrics)
+
     if could_be_binary:
         assert pass_at_k is not None
         eval_metrics.update(pd.Series(pass_at_k.mean()).to_dict())
