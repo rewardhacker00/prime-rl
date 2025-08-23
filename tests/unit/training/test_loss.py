@@ -7,9 +7,9 @@ pytestmark = [pytest.mark.gpu]
 
 
 def test_grpo_loss():
-    logprobs = torch.randn(10, 10, dtype=torch.float32).cuda()
-    old_logprobs = torch.randn(10, 10, dtype=torch.float32).cuda()
-    advantages = torch.randn(10, 10).cuda()
+    logprobs = torch.randn(100, dtype=torch.float32).cuda()
+    old_logprobs = torch.randn(100, dtype=torch.float32).cuda()
+    advantages = torch.randn(100).cuda()
 
     loss, _ = grpo_loss_clip(
         logprobs,
@@ -19,13 +19,13 @@ def test_grpo_loss():
         epsilon_high=0.2,
         clip_ratio=10.0,
     )
-    assert loss.shape == (10, 10)
+    assert loss.shape == (100,)
 
 
 def test_grpo_loss_ratio():
-    logprobs = torch.randn(10, 10, dtype=torch.float32).cuda()
-    old_logprobs = torch.randn(10, 10, dtype=torch.float32).cuda()
-    advantages = torch.randn(10, 10).cuda()
+    logprobs = torch.randn(100, dtype=torch.float32).cuda()
+    old_logprobs = torch.randn(100, dtype=torch.float32).cuda()
+    advantages = torch.randn(100).cuda()
 
     loss, _ = grpo_loss_ratio(
         logprobs,
@@ -33,7 +33,7 @@ def test_grpo_loss_ratio():
         advantages,
         clip_ratio=10.0,
     )
-    assert loss.shape == (10, 10)
+    assert loss.shape == (100,)
 
 
 def test_entropy_loss():

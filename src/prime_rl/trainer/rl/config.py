@@ -19,6 +19,13 @@ from prime_rl.utils.pydantic_config import BaseConfig, BaseSettings
 class BaseLossConfig(BaseModel):
     """Base config for loss."""
 
+    norm_type: Annotated[
+        Literal["token", "sequence"],
+        Field(
+            description="Normalization type for loss scaling. 'token' normalizes by the total number of unmasked tokens in the batch, 'sequence' normalizes by the total tokens within a sequence."
+        ),
+    ] = "token"
+
 
 class ClippingLossConfig(BaseLossConfig):
     """Configures the clipping loss."""

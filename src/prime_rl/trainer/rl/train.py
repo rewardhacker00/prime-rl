@@ -13,10 +13,10 @@ from prime_rl.trainer.rl.config import RLTrainerConfig
 from prime_rl.trainer.rl.data import DataLoader, FakeDataLoader
 from prime_rl.trainer.logger import setup_logger
 from prime_rl.trainer.rl.loss import (
-    compute_loss,
     shift_logits,
     selective_log_softmax,
     compute_entropy,
+    compute_packed_sequence_loss,
 )
 from prime_rl.trainer.scheduler import setup_scheduler
 from prime_rl.trainer.model import (
@@ -226,11 +226,16 @@ def train(config: RLTrainerConfig):
         batch_size = micro_batch_size * num_micro_batches
 
         # Normalize by the local number of unmasked tokens in the batch (per-batch length normalization)
-        loss_scale = torch.tensor(
-            sum(micro_batch["loss_mask"].sum().item() for micro_batch in micro_batches), device="cuda"
-        )
+        if config.loss.norm_type == "token":
+            loss_scale = torch.tensor(
+                sum(micro_batch["loss_mask"].sum().item() for micro_batch in micro_batches),
+                dtype=torch.float32,
+                device="cuda",
+            ).item()
+        elif config.loss.norm_type == "sequence":
+            loss_scale = float(batch_size)
 
-        logger.info(f"Starting forward and backward pass ({num_micro_batches=}, {loss_scale.item()=})")
+        logger.info(f"Starting forward and backward pass ({num_micro_batches=})")
         tensors = Tensors()  # Used to accumulate tensor statistics across micro-batches and ranks for logging
         for micro_step, micro_batch in enumerate(micro_batches):
             input_ids = micro_batch["input_ids"].to("cuda")
@@ -248,19 +253,20 @@ def train(config: RLTrainerConfig):
             logprobs = selective_log_softmax(shifted_logits, input_ids)
 
             # Compute loss
-            loss, loss_tensors = compute_loss(
-                logprobs=logprobs,
-                old_logprobs=old_logprobs,
-                advantages=advantages,
+            loss, loss_tensors = compute_packed_sequence_loss(
+                logprobs=logprobs.squeeze(0),
+                old_logprobs=old_logprobs.squeeze(0),
+                advantages=advantages.squeeze(0),
+                loss_mask=loss_mask.squeeze(0),
+                position_ids=position_ids.squeeze(0),
                 loss_config=config.loss,
+                loss_scale=loss_scale,
             )
 
             # Compute entropy
             with torch.no_grad():
                 entropy = compute_entropy(shifted_logits)
 
-            # Reduce the loss
-            loss = (loss * loss_mask).sum() / (loss_scale + 1e-6)
 
             # Delete logits and shifted_logits before backward pass to avoid memory spike
             del logits, shifted_logits
@@ -275,6 +281,7 @@ def train(config: RLTrainerConfig):
             tensors["recomputed_logprob_error"].append(
                 recomputed_logprob_errors[micro_step][loss_mask].detach().to("cpu")
             )
+            tensors["loss"].append(loss.detach().to("cpu").unsqueeze(0))
 
             if is_tt_moe_model(model):
                 load_balance_stats = get_load_balance_stats(model)
@@ -283,7 +290,7 @@ def train(config: RLTrainerConfig):
 
             # Add loss tensors to tensor dict for logging purposes
             for key, loss_tensor in loss_tensors.items():
-                loss_tensor = loss_tensor.detach()[loss_mask].detach().to("cpu")
+                loss_tensor = loss_tensor.detach()[loss_mask.squeeze()].detach().to("cpu")
                 tensors[key].append(loss_tensor)
 
             # Debug log with *local, micro step* stats
