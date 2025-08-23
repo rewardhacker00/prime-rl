@@ -116,7 +116,7 @@ def compute_loss(
         total_is_clipped.append(is_clipped)
 
     # Apply loss scaling
-    scaled_loss = total_loss / min(loss_scale, 1)
+    scaled_loss = total_loss / max(loss_scale, 1)
 
     return scaled_loss, {
         "importance_ratio": torch.cat(total_importance_ratio),
