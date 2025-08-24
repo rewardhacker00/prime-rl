@@ -66,7 +66,6 @@ def compute_loss(
     loss_config: LossConfig,
     loss_scale: int,
 ) -> tuple[Float[Tensor, ""], dict[str, Any]]:
-
     """
     Compute loss for packed sequences (batch size = 1, multiple sequences packed along sequence dimension).
 

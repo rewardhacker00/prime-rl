@@ -163,7 +163,12 @@ async def run_eval(
         "max": float(max_avg_completion_len),
         "min": float(min_avg_completion_len),
     }
-    eval_completion_len_metrics = {**{f"eval_completion_len/{eval_id}/{k}": v for k, v in eval_completion_len_metrics.items()}}
+    eval_completion_len_metrics = {
+        **{f"eval_completion_len/{eval_id}/{k}": v for k, v in eval_completion_len_metrics.items()}
+    }
+    if step is None:
+        step = ckpt_step
+    eval_completion_len_metrics.update({"progress/ckpt_step": ckpt_step, "step": step})
     monitor.log(eval_completion_len_metrics)
 
     if could_be_binary:

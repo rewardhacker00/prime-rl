@@ -17,7 +17,6 @@ from prime_rl.trainer.rl.loss import (
     selective_log_softmax,
     compute_entropy,
     compute_loss,
-
 )
 from prime_rl.trainer.scheduler import setup_scheduler
 from prime_rl.trainer.model import (
@@ -264,7 +263,7 @@ def train(config: RLTrainerConfig):
             # Compute entropy
             with torch.no_grad():
                 entropy = compute_entropy(shifted_logits)
-                
+
             # Delete logits and shifted_logits before backward pass to avoid memory spike
             del logits, shifted_logits
 
