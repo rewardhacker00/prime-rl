@@ -12,7 +12,7 @@ class OfflineEvalConfig(EvalConfig, BaseSettings):
     """Configures evaluation."""
 
     # The client configuration
-    client: ClientConfig = ClientConfig()
+    client: ClientConfig = ClientConfig(timeout=36000)
 
     # The model configuration
     model: ModelConfig = ModelConfig()

@@ -14,7 +14,7 @@ from prime_rl.utils.utils import get_weight_ckpt_model_path
 
 def setup_client(client_config: ClientConfig) -> AsyncOpenAI:
     # We use a longer request timeout than default, but if more than 20min, we probably need faster inference deployment
-    timeout = httpx.Timeout(timeout=1200, connect=5.0)
+    timeout = httpx.Timeout(timeout=client_config.timeout, connect=5.0)
     # We use as many concurrent connections as possible, but lower than available ports
     limits = httpx.Limits(
         max_connections=28000,  # OAI default: 1000

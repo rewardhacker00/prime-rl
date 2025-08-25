@@ -11,6 +11,13 @@ from prime_rl.utils.pydantic_config import BaseConfig, BaseSettings
 class ClientConfig(BaseConfig):
     """Configures the client to be used for inference."""
 
+    timeout: Annotated[
+        int,
+        Field(
+            description="Timeout in seconds for the OpenAI API. By default, it is set to 1200 seconds.",
+        ),
+    ] = 1200
+
     host: Annotated[
         str,
         Field(

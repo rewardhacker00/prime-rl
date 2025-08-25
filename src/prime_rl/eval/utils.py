@@ -5,11 +5,13 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import torch
 from openai import AsyncOpenAI
 from verifiers import load_environment
+from verifiers.types import GenerateOutputs
 
 from prime_rl.orchestrator.config import EvalSamplingConfig, ModelConfig
-from prime_rl.orchestrator.utils import parse_completion_tokens
+from prime_rl.orchestrator.utils import parse_completion_tokens, parse_truncated_completions
 from prime_rl.utils.logger import get_logger
 from prime_rl.utils.monitor import get_monitor
 from prime_rl.utils.utils import capitalize, get_eval_dir
@@ -63,17 +65,30 @@ async def run_eval(
     # Build inputs dataset (mirror Environment.evaluate but async)
     if vf_eval.eval_dataset is None:
         logger.warning(f"Did not find eval dataset for {eval_id}, falling back to train dataset")
-        inputs = vf_eval.get_dataset(n=num_examples)
+        dataset = vf_eval.get_dataset(n=num_examples)
     else:
-        inputs = vf_eval.get_eval_dataset(n=num_examples)
+        dataset = vf_eval.get_eval_dataset(n=num_examples)
 
-    assert inputs is not None
-    num_unique_examples = len(inputs)
+    # Convert to list of examples
+    assert dataset is not None
+    examples = dataset.to_list()
+    example_ids = list(range(len(examples)))
+
+    # Duplicate examples `rollouts_per_example` times
     if rollouts_per_example > 1:
-        inputs = inputs.repeat(rollouts_per_example)
+        example_ids = [example_id for example_id in example_ids for _ in range(rollouts_per_example)]
+        examples = [example for example in examples for _ in range(rollouts_per_example)]
+
+    # Prepare inputs
+    inputs = {
+        "prompt": [example["prompt"] for example in examples],
+        "info": [example.get("info", {}) for example in examples],
+        "task": [example.get("task", "") for example in examples],
+        "answer": [example.get("answer", "") for example in examples],
+    }
 
     logger.debug(
-        f"Evaluating {eval_id} (num_examples={num_unique_examples}, rollouts_per_example={rollouts_per_example}) with args {env_args}"
+        f"Evaluating {eval_id} (num_examples={len(examples)}, rollouts_per_example={rollouts_per_example}) with args {env_args}"
     )
 
     # Always return logprobs to parser response length
@@ -100,7 +115,7 @@ async def run_eval(
 
     # Run async generation and scoring
     run_eval_start_time = time.time()
-    results = await vf_eval.a_generate(
+    generate_outputs: GenerateOutputs = await vf_eval.a_generate(
         inputs=inputs,
         client=client,
         model=model_config.name,
@@ -110,29 +125,17 @@ async def run_eval(
     run_eval_time = time.time() - run_eval_start_time
     logger.debug(f"Generated and scored rollouts in {run_eval_time:.2f}s")
 
-    problem_ids = list(range(num_unique_examples)) * rollouts_per_example
-
-    completion_lengths = [sum([len(parse_completion_tokens(r)) for r in state["responses"]]) for state in results.state]
-    avg_completion_len = sum(completion_lengths) / len(completion_lengths)
-    completion_len_df = pd.DataFrame({"problem_id": problem_ids, "completion_len": completion_lengths})
-    avg_completion_len_per_problem = completion_len_df.groupby("problem_id").completion_len.mean()
-    max_avg_completion_len = avg_completion_len_per_problem.max()
-    min_avg_completion_len = avg_completion_len_per_problem.min()
-
-    # Average reward
-    rewards = np.array(results.reward, dtype=float)
-    rows = []
-    for problem_id, reward in zip(problem_ids, rewards):
-        row = {"problem_id": problem_id, "reward": reward}
-        rows.append(row)
+    rewards = torch.tensor(generate_outputs.reward).reshape(-1, rollouts_per_example).float()
+    completion_lens = torch.tensor(list(map(len, parse_completion_tokens(states=generate_outputs.state)))).reshape(-1, rollouts_per_example).float()
+    is_truncated = torch.tensor(parse_truncated_completions(states=generate_outputs.state)).reshape(-1, rollouts_per_example).float()
 
     k = rollouts_per_example
-    sample_stats = pd.DataFrame(rows)
+    sample_stats = pd.DataFrame({"example_id": example_ids, "reward": rewards.flatten().tolist()})
     unique_rewards = sample_stats.reward.unique()
     could_be_binary = set(unique_rewards).issubset({0.0, 1.0})
     if could_be_binary:
         pass_at_k = (
-            sample_stats.groupby("problem_id")
+            sample_stats.groupby("example_id")
             .apply(lambda x: compute_pass_at_k(x.reward), include_groups=False)
             .apply(pd.Series)
         )
@@ -148,20 +151,19 @@ async def run_eval(
         for pass_rate, pass_rate_score in pd.Series(pass_at_k.mean()).items():
             message += f", {capitalize(str(pass_rate))}: {pass_rate_score:.4f}"
     message += (
-        f", Seq. Len: {avg_completion_len:.2f}, Max Seq. Len: {max_avg_completion_len:.2f}, "
-        f"Min Seq. Len: {min_avg_completion_len:.2f}"
+        f", Completion Length: {completion_lens.mean():.2f} (±{completion_lens.std():.2f}, ∈[{completion_lens.min():.2f}, {completion_lens.max():.2f}]), Truncated: {is_truncated.mean() * 100:.1f}%)"
     )
-    logger.success(message + ")")
+    logger.success(message)
 
     # Log statistics to monitor
     eval_metrics = {
-        f"avg@{k}": float(sample_stats.reward.mean()),
+        f"avg@{k}": rewards.mean().item(),
     }
 
     eval_completion_len_metrics = {
-        "avg": float(avg_completion_len),
-        "max": float(max_avg_completion_len),
-        "min": float(min_avg_completion_len),
+        "avg": completion_lens.mean().item(),
+        "max": completion_lens.max().item(),
+        "min": completion_lens.min().item(),
     }
     eval_completion_len_metrics = {
         **{f"eval_completion_len/{eval_id}/{k}": v for k, v in eval_completion_len_metrics.items()}
@@ -194,7 +196,7 @@ async def run_eval(
     if save:
         # Save samples as dataset
         eval_dir = get_eval_dir(output_dir) / f"step_{ckpt_step}" / eval_id
-        dataset = vf_eval.make_dataset(results)
+        dataset = vf_eval.make_dataset(generate_outputs)
         dataset.save_to_disk(eval_dir)
 
         # Save "report"
@@ -202,10 +204,13 @@ async def run_eval(
         report_path = eval_dir / "report.json"
         report = {
             "metrics": eval_metrics,
+            "truncated": {
+                "mean": is_truncated.mean().item(),
+            },
             "completion_len": {
-                "avg": float(avg_completion_len),
-                "max": float(max_avg_completion_len),
-                "min": float(min_avg_completion_len),
+                "avg": completion_lens.mean().item(),
+                "max": completion_lens.max().item(),
+                "min": completion_lens.min().item(),
             },
         }
         with open(report_path, "w") as f:

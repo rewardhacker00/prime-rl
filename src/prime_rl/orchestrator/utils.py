@@ -15,17 +15,24 @@ from prime_rl.utils.utils import (
 )
 
 
-def parse_completion_tokens(chat_completion: ChatCompletion) -> list[int]:
+def parse_completion_tokens(states: list[State]) -> list[list[int]]:
     """Parses the output token ids from a list of chat completions returned by vLLM OAI server."""
-    assert len(chat_completion.choices) == 1, "Response should always have one choice"
-    assert chat_completion.choices[0].logprobs is not None, (
-        "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
-    )
-    assert chat_completion.choices[0].logprobs.content is not None, (
-        "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
-    )
-    tokens = [int(token.token.split(":")[-1]) for token in chat_completion.choices[0].logprobs.content]
-    return tokens
+    completion_tokens = []
+    for state in states:
+        assert "responses" in state, "Responses should be present in the state"
+        assert all(isinstance(r, ChatCompletion) for r in state["responses"]), (
+            "Responses should be ChatCompletion objects"
+        )
+        for chat_completion in state["responses"]:
+            assert len(chat_completion.choices) == 1, "Response should always have one choice"
+            assert chat_completion.choices[0].logprobs is not None, (
+                "Logprobs should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+            )
+            assert chat_completion.choices[0].logprobs.content is not None, (
+                "Logprob content should not be None. Make sure to set logprobs=True in the extra body when making the request to /v1/chat/completions"
+            )
+            completion_tokens.append([int(token.token.split(":")[-1]) for token in chat_completion.choices[0].logprobs.content])
+    return completion_tokens
 
 
 def parse_truncated_completions(states: list[State]) -> list[bool]:
