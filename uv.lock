@@ -2149,6 +2149,7 @@ dependencies = [
     { name = "tomli" },
     { name = "tomli-w" },
     { name = "torch" },
+    { name = "torchdata" },
     { name = "transformers" },
     { name = "uvloop" },
     { name = "verifiers" },
@@ -2226,6 +2227,7 @@ requires-dist = [
     { name = "tomli", specifier = ">=2.2.1" },
     { name = "tomli-w" },
     { name = "torch", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/test/cu128" },
+    { name = "torchdata", specifier = ">=0.11.0" },
     { name = "transformers", specifier = ">=4.53.0" },
     { name = "unscramble", marker = "extra == 'vf'", specifier = ">=0.1.1", index = "https://hub.primeintellect.ai/primeintellect/simple" },
     { name = "uvloop", specifier = ">=0.21.0" },
@@ -3243,6 +3245,19 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/62/7d/6c15f15d3edc5271abc808f70713644b50f0f7bfb85a09dba8b5735fbad3/torchaudio-2.7.1-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:d66bd76b226fdd4135c97650e1b7eb63fb7659b4ed0e3a778898e41dbba21b61", size = 1686680, upload-time = "2025-06-04T17:43:58.986Z" },
     { url = "https://files.pythonhosted.org/packages/48/65/0f46ba74cdc67ea9a8c37c8acfb5194d81639e481e85903c076bcd97188c/torchaudio-2.7.1-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:9cbcdaab77ad9a73711acffee58f4eebc8a0685289a938a3fa6f660af9489aee", size = 3506966, upload-time = "2025-06-04T17:44:06.537Z" },
     { url = "https://files.pythonhosted.org/packages/52/29/06f887baf22cbba85ae331b71b110b115bf11b3968f5914a50c17dde5ab7/torchaudio-2.7.1-cp312-cp312-win_amd64.whl", hash = "sha256:9cfb8f6ace8e01e2b89de74eb893ba5ce936b88b415383605b0a4d974009dec7", size = 2484265, upload-time = "2025-06-04T17:44:00.277Z" },
+]
+
+[[package]]
+name = "torchdata"
+version = "0.11.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "requests" },
+    { name = "torch" },
+    { name = "urllib3" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/95/d4/af694ef718aedbe95a72760ab9ff7a6a7a44ace2d7f70c27bfeb67c5c503/torchdata-0.11.0-py3-none-any.whl", hash = "sha256:52b940fbbe0e00fb21cabddf528449d1bec5bfb0d0823b7487b15f951658ee33", size = 61968, upload-time = "2025-02-20T22:26:30.666Z" },
 ]
 
 [[package]]
