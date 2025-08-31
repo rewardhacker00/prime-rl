@@ -68,6 +68,20 @@ class ModelConfig(BaseConfig):
         ),
     ] = 1
 
+    tp: Annotated[
+        int,
+        Field(
+            description="The tensor parallelism size to use. If 1, then no TP will be used.",
+        ),
+    ] = 1
+
+    cp: Annotated[
+        int,
+        Field(
+            description="The context parallelism size to use. If 1, then no CP will be used.",
+        ),
+    ] = 1
+
     liger_kernel: Annotated[
         bool,
         Field(
