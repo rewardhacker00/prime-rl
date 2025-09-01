@@ -530,7 +530,7 @@ def rl(config: RLConfig):
         trainer_file = get_temp_toml_file()
         with open(trainer_file, "wb") as f:
             tomli_w.dump(config.trainer.model_dump(exclude_none=True, mode="json"), f)
-
+        
         trainer_cmd = [
             "uv",
             "run",
@@ -539,7 +539,7 @@ def rl(config: RLConfig):
             f"--rdzv-id={uuid.uuid4().hex}",
             "--nproc-per-node",
             str(config.trainer_gpus),
-            "src/prime_rl/trainer/rl/train.py",
+            "-m", "prime_rl.trainer.rl.train",
             "@",
             trainer_file.as_posix(),
         ]
