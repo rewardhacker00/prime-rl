@@ -144,6 +144,13 @@ class EvalSamplingConfig(BaseConfig):
         ),
     ] = None
 
+    reasoning_effort: Annotated[
+        Literal["minimal", "low", "medium", "high"] | None,
+        Field(
+            description="Constrains effort on reasoning for reasoning models. Currently supported values are minimal, low, medium, and high. Defaults to None, which means we fall back to the inference server's default value.",
+        ),
+    ] = None
+
     seed: Annotated[
         int | None,
         Field(
@@ -190,32 +197,67 @@ class EvalConfig(BaseConfig):
         ),
     ] = []
 
+    max_concurrent: Annotated[
+        list[int],
+        Field(
+            description="Maximum number of concurrent rollouts to generate and score. If empty, will default to -1 for all environments.",
+        ),
+    ] = []
+
     sampling: EvalSamplingConfig = Field(
         default_factory=EvalSamplingConfig,
         description="Shared sampling configuration for evals; can differ from training sampling.",
     )
 
-    save: Annotated[
+    save_to_disk: Annotated[
         bool,
         Field(
             description="Whether to save the evaluation artifacts to the outputs directory.",
         ),
     ] = True
 
+    save_to_hf: Annotated[
+        str | None,
+        Field(
+            description="The name of the HF dataset to save the evaluation results to. Defaults to None, which means we do not save to HF Hub. If multiple environments are evaluated, we upload a dataset with one split per environment. If a checkpoint is evaluated, we suffix the HF Hub name with the checkpoint step.",
+        ),
+    ] = None
+
     @model_validator(mode="after")
     def _validate_and_fill_eval_lists(self):
         # If rollouts_per_example is empty, default to 1 for all ids
         if len(self.rollouts_per_example) == 0:
             self.rollouts_per_example = [1 for _ in self.environment_ids]
-        elif len(self.rollouts_per_example) != len(self.environment_ids):
+        elif len(self.rollouts_per_example) == 1:
+            self.rollouts_per_example = [self.rollouts_per_example[0] for _ in self.environment_ids]
+
+        if len(self.rollouts_per_example) != len(self.environment_ids):
             raise ValueError("Number of rollouts_per_example entries must match number of ids")
 
         # num_examples: if empty/unspecified, default to -1 for all; else length must match ids
         if len(self.num_examples) == 0:
             self.num_examples = [-1 for _ in self.environment_ids]
-        elif len(self.num_examples) != len(self.environment_ids):
+        elif len(self.num_examples) == 1:
+            self.num_examples = [self.num_examples[0] for _ in self.environment_ids]
+
+        if len(self.num_examples) != len(self.environment_ids):
             raise ValueError("Number of num_examples entries must match number of ids")
 
+        # max_concurrent: if empty/unspecified, default to -1 for all; else length must match ids
+        if len(self.max_concurrent) == 0:
+            self.max_concurrent = [-1 for _ in self.environment_ids]
+        elif len(self.max_concurrent) == 1:
+            self.max_concurrent = [self.max_concurrent[0] for _ in self.environment_ids]
+
+        elif len(self.max_concurrent) != len(self.environment_ids):
+            raise ValueError("Number of max_concurrent entries must match number of ids")
+
+        return self
+
+    @model_validator(mode="after")
+    def save_to_disk_if_save_to_hf(self):
+        if self.save_to_hf is not None:
+            self.save_to_disk = True
         return self
 
 
