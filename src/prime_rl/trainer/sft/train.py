@@ -170,7 +170,7 @@ def train(config: SFTTrainerConfig):
 
             with maybe_context_parallel:
                 # Forward pass
-                logits = forward(model, input_ids, position_ids).contiguous()
+                logits = forward(model, input_ids, position_ids)
                 B, L, V = logits.shape
 
                 # Compute loss
