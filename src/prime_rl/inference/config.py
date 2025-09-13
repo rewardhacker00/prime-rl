@@ -6,6 +6,8 @@ from pydantic import Field
 from prime_rl.utils.pydantic_config import BaseConfig, BaseSettings, get_all_fields
 from prime_rl.utils.utils import rgetattr, rsetattr
 
+ServerType = Literal["vllm"]
+
 # TODO: Set thinking/ solution budget
 
 
@@ -14,6 +16,7 @@ class ServerConfig(BaseConfig):
 
     host: Annotated[str | None, Field(description="The host to bind to.")] = None
     port: Annotated[int, Field(description="The port to bind to.")] = 8000
+    server_type: Annotated[ServerType, Field(description="Backend type.")] = "vllm"
 
 
 class ParallelConfig(BaseConfig):
@@ -84,7 +87,6 @@ class ModelConfig(BaseConfig):
     ] = False
 
     tool_call_parser: Annotated[
-
         str,
         Field(
             description="The tool call parser to use. Passed to vLLM as `--tool-call-parser`",
@@ -123,7 +125,7 @@ class InferenceConfig(BaseSettings):
             "model.enforce_eager": "enforce_eager",
             "model.trust_remote_code": "trust_remote_code",
             "model.enable_auto_tool_choice": "enable_auto_tool_choice",  # requires underscores (unlike on CLI)
-            "model.tool_call_parser": "tool_call_parser",                # requires underscores (unlike on CLI)
+            "model.tool_call_parser": "tool_call_parser",  # requires underscores (unlike on CLI)
             "parallel.tp": "tensor_parallel_size",
             "parallel.dp": "data_parallel_size",
         }
