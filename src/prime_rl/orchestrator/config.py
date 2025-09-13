@@ -41,6 +41,11 @@ class ClientConfig(BaseConfig):
         ),
     ] = "vllm"
 
+    apply_sampling_transforms: Annotated[
+        bool,
+        Field(description="Apply temp/top_p to SGLang logits."),
+    ] = True
+
     @model_validator(mode="after")
     def auto_setup_server_type(self):
         if self.base_url == "https://api.openai.com/v1":
