@@ -1,5 +1,5 @@
-from prime_rl.inference.backends.vllm import VLLMBackend
 from prime_rl.inference.backends.sglang import SGLangBackend
+from prime_rl.inference.backends.vllm import VLLMBackend
 from prime_rl.inference.config import InferenceConfig
 from prime_rl.utils.pydantic_config import parse_argv
 
@@ -9,6 +9,8 @@ BACKENDS = {"vllm": VLLMBackend, "sglang": SGLangBackend}
 def main():
     config = parse_argv(InferenceConfig, allow_extras=True)
     server_type = config.server.server_type
+    if server_type == "sglang":
+        config.set_unknown_args(config.to_sglang() + config.get_unknown_args())
     backend_cls = BACKENDS.get(server_type)
     if backend_cls is None:
         raise ValueError(f"Unsupported server type: {server_type}")
