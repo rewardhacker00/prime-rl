@@ -62,7 +62,7 @@ async def check_has_model(client: AsyncOpenAI, model_name: str) -> None:
 
 
 async def update_weights(client: AsyncOpenAI, path: Path, step: int) -> None:
-    """Make a HTTP post request to the vLLM server to update the weights."""
+    """POST to update backend weights."""
     logger = get_logger()
     url = str(client.base_url)[:-4] + "/update_weights"
     try:
@@ -75,7 +75,7 @@ async def update_weights(client: AsyncOpenAI, path: Path, step: int) -> None:
 
 
 async def reload_weights(client: AsyncOpenAI) -> None:
-    """Make a HTTP post request to the vLLM server to reload weights (reset to base model)."""
+    """POST to reset backend weights."""
     logger = get_logger()
     url = str(client.base_url)[:-4] + "/reload_weights"
     try:
