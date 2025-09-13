@@ -87,6 +87,18 @@ async def reload_weights(client: AsyncOpenAI) -> None:
     await client.post(url, cast_to=Response, body={})
 
 
+async def flush_cache(client: AsyncOpenAI) -> None:
+    """POST to flush backend cache."""
+    logger = get_logger()
+    url = str(client.base_url)[:-4] + "/flush_cache"
+    try:
+        logger.debug(f"Sending request to {url} to flush cache")
+        await client.post(url, cast_to=Response, body={})
+    except NotFoundError:
+        logger.warning(f"The route {url} does not exist. Skipping cache flush.")
+        return
+
+
 def apply_sampling_transforms(logits, temperature=1.0, top_p=1.0):
     t = torch.tensor(logits, dtype=torch.float32)
     t = t / max(temperature, 1e-6)
