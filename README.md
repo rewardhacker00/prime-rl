@@ -239,6 +239,7 @@ uv run  torchrun \
 **Multi-Node Inference**
 
 We rely on vLLM's internal load balancing for data parallel deployment ([docs](https://docs.vllm.ai/en/v0.10.0/serving/data_parallel_deployment.html)).
+SGLang backend (`--server.server_type sglang`) lacks this balancer, returns logits only, and cannot update weights from tensor.
 
 First, ensure that your nodes are in the same private network and can reach each other. If not, a simple solution is to set up a VPN using [Tailscale](https://tailscale.com). Follow their documentation to setup a VPN on each node. Then, configure the GLOO and NCCL network interface
 
@@ -415,6 +416,10 @@ bash scripts/tmux.sh
 
 ```bash
 uv run inference @ configs/reverse_text/infer.toml
+```
+To run SGLang instead:
+```bash
+uv run inference @ configs/reverse_text/infer.toml --server.server_type sglang
 ```
 
 3. Start the trainer and orchestrator in the `Trainer` pane.
