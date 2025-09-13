@@ -50,6 +50,8 @@ source $HOME/.local/bin/env
 uv sync && uv sync --all-extras
 ```
 
+SGLang is installed by default (no extra flag needed).
+
 </details>
 
 
@@ -156,6 +158,17 @@ uv run rl \
   --trainer @ configs/reverse_text/train.toml \
   --orchestrator @ configs/reverse_text/orch.toml \
   --inference @ configs/reverse_text/infer.toml
+```
+
+Using the SGLang backend instead of vLLM:
+
+```bash
+uv run rl \
+  --trainer @ configs/reverse_text/train.toml \
+  --orchestrator @ configs/reverse_text/orch.toml \
+  --inference @ configs/reverse_text/infer.toml \
+  --inference.server.server_type sglang \
+  --orchestrator.client.server_type sglang
 ```
 
 *With two small GPUs (e.g. RTX 3090/4090), this experiment should finish in less than 5 minutes.*
