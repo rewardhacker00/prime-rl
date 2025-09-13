@@ -18,6 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends --force-yes \
     curl \
     sudo \
     git \
+    libnuma1 \
     && apt-get clean autoclean && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
 # Download the latest installer
@@ -65,6 +66,7 @@ RUN apt-get update && apt-get install -y \
     openssh-server \
     git-lfs \
     gpg \
+    libnuma1 \
     && apt-get clean autoclean \
     && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 

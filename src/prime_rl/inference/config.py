@@ -92,11 +92,11 @@ class ModelConfig(BaseConfig):
     ] = False
 
     tool_call_parser: Annotated[
-        str,
+        str | None,
         Field(
-            description="The tool call parser to use. Passed to vLLM as `--tool-call-parser`",
+            description="The tool call parser to use. For vLLM, defaults to 'hermes' if unset. For sglang, only pass values supported by sglang.",
         ),
-    ] = "hermes"
+    ] = None
 
     quantization: Annotated[
         str | None,
@@ -158,8 +158,13 @@ class InferenceConfig(BaseSettings):
             value = rgetattr(self, key.replace("-", "_"))
             rsetattr(namespace, to_vllm.get(key, key), value)
 
+        # Set defaults specific to vLLM
         # Set `logprobs_mode` to `processed_logprobs` by default
         rsetattr(namespace, "logprobs_mode", "processed_logprobs")
+
+        # Default tool_call_parser to 'hermes' for vLLM if not specified
+        if getattr(namespace, "tool_call_parser", None) is None:
+            rsetattr(namespace, "tool_call_parser", "hermes")
 
         return namespace
 
