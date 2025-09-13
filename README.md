@@ -50,7 +50,6 @@ source $HOME/.local/bin/env
 uv sync && uv sync --all-extras
 ```
 
-SGLang is installed by default (no extra flag needed).
 
 </details>
 
