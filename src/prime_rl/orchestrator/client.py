@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import httpx
+import torch
 from httpx import Response
 from openai import AsyncOpenAI, NotFoundError
 
@@ -84,3 +85,18 @@ async def reload_weights(client: AsyncOpenAI) -> None:
         logger.warning(f"The route {url} does not exist. Skipping weight reload.")
         return
     await client.post(url, cast_to=Response, body={})
+
+
+def apply_sampling_transforms(logits, temperature=1.0, top_p=1.0):
+    t = torch.tensor(logits, dtype=torch.float32)
+    t = t / max(temperature, 1e-6)
+    if top_p < 1.0:
+        probs = torch.softmax(t, dim=-1)
+        sorted_probs, idx = torch.sort(probs, descending=True)
+        cum = sorted_probs.cumsum(dim=-1)
+        mask = cum > top_p
+        sorted_probs[mask] = 0
+        probs = torch.zeros_like(probs).scatter(-1, idx, sorted_probs)
+        probs = probs / probs.sum(dim=-1, keepdim=True)
+        return torch.log(probs + 1e-12).tolist()
+    return torch.log_softmax(t, dim=-1).tolist()
