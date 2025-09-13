@@ -1,15 +1,30 @@
-from prime_rl.inference.backends.vllm import VLLMBackend
-from prime_rl.inference.backends.sglang import SGLangBackend
 from prime_rl.inference.config import InferenceConfig
 from prime_rl.utils.pydantic_config import parse_argv
 
-BACKENDS = {"vllm": VLLMBackend, "sglang": SGLangBackend}
+
+def _get_backend_cls(server_type: str):
+    """Return the backend class for the given server type.
+    Imports are done lazily so optional backends (e.g., sglang) do not cause
+    """
+    if server_type == "vllm":
+        from prime_rl.inference.backends.vllm import VLLMBackend
+
+        return VLLMBackend
+    if server_type == "sglang":
+        try:
+            from prime_rl.inference.backends.sglang import SGLangBackend
+        except ModuleNotFoundError as e:
+            # Surface a clearer error when the optional dependency isn't present
+            raise RuntimeError(
+            ) from e
+        return SGLangBackend
+    return None
 
 
 def main():
     config = parse_argv(InferenceConfig, allow_extras=True)
     server_type = config.server.server_type
-    backend_cls = BACKENDS.get(server_type)
+    backend_cls = _get_backend_cls(server_type)
     if backend_cls is None:
         raise ValueError(f"Unsupported server type: {server_type}")
     backend = backend_cls()
