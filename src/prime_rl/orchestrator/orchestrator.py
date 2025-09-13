@@ -19,6 +19,7 @@ from prime_rl.orchestrator.client import (
     check_health,
     reload_weights,
     update_weights,
+    flush_cache,
     setup_client,
 )
 from prime_rl.orchestrator.config import OrchestratorConfig
@@ -103,6 +104,8 @@ async def orchestrate(config: OrchestratorConfig):
         ckpt_manager.load(progress, buffer, step=config.ckpt.resume_step)
         ckpt_step = max(progress.step - config.async_level, 0)
         await update_weights(client, get_weights_dir(config.output_dir), ckpt_step)
+        if config.client.server_type == "sglang":
+            await flush_cache(client)
     else:
         logger.info("Training from scratch. Resetting weights to base model")
         await reload_weights(client)
@@ -157,6 +160,8 @@ async def orchestrate(config: OrchestratorConfig):
             logger.info(f"Updating weights to weight checkpoint {ckpt_step}")
             update_weights_start_time = time.time()
             await update_weights(client, get_weights_dir(config.output_dir), ckpt_step)
+            if config.client.server_type == "sglang":
+                await flush_cache(client)
             update_weights_time = time.time() - update_weights_start_time
             logger.debug(f"Updated weights in {update_weights_time:.2f}s")
 
