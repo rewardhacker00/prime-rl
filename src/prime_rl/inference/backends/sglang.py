@@ -4,7 +4,7 @@ from typing import Any
 import httpx
 from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
-from sglang.srt.entrypoints.http_server import app, launch_server, _global_state
+from sglang.srt.entrypoints.http_server import _global_state, app, launch_server
 from sglang.srt.managers.io_struct import (
     UpdateWeightFromDiskReqInput,
     UpdateWeightsFromTensorReqInput,
@@ -15,27 +15,8 @@ from prime_rl.inference.backends.base import BaseBackend
 from prime_rl.inference.config import InferenceConfig
 
 
-def _translate_config(config: InferenceConfig) -> list[str]:
-    args: list[str] = ["--model-path", config.model.name, "--port", str(config.server.port)]
-    if config.server.host:
-        args += ["--host", config.server.host]
-    if config.model.dtype:
-        args += ["--dtype", config.model.dtype]
-    if config.model.max_model_len is not None:
-        args += ["--context-length", str(config.model.max_model_len)]
-    if config.model.trust_remote_code:
-        args.append("--trust-remote-code")
-    args += ["--tp-size", str(config.parallel.tp), "--dp-size", str(config.parallel.dp)]
-    if config.seed is not None:
-        args += ["--random-seed", str(config.seed)]
-    if config.model.tool_call_parser:
-        args += ["--tool-call-parser", config.model.tool_call_parser]
-    return args
-
-
 def server(config: InferenceConfig, sglang_args: list[str]):
-    argv = _translate_config(config) + sglang_args
-    server_args = prepare_server_args(argv)
+    server_args = prepare_server_args(sglang_args)
 
     def _remove_route(path: str):
         for r in list(app.router.routes):
