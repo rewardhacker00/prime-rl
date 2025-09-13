@@ -15,11 +15,10 @@ def _get_backend_cls(server_type: str):
         try:
             from prime_rl.inference.backends.sglang import SGLangBackend
         except ModuleNotFoundError as e:
-            # Surface a clearer error when the optional dependency isn't present
             raise RuntimeError(
+                "SGLang backend requested but not installed."
             ) from e
         return SGLangBackend
-    return None
 
 
 def main():
@@ -37,4 +36,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
