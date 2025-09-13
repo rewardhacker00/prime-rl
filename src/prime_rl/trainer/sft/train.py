@@ -188,6 +188,9 @@ def train(config: SFTTrainerConfig):
                 # Scale loss by number of gradient accumulation steps
                 loss /= grad_accum_steps
 
+                # Accumulate loss
+                batch_loss += loss
+
                 # Delete logits before backward pass to avoid memory spike
                 del logits
 
@@ -217,7 +220,6 @@ def train(config: SFTTrainerConfig):
             memory_profiler.step()
 
         # Synchronize the tensor metrics across all steps and ranks
-
         dist.all_reduce(batch_loss, op=dist.ReduceOp.AVG)
 
         if is_tt_moe_model(model):
@@ -294,7 +296,6 @@ def train(config: SFTTrainerConfig):
         progress.step += 1
 
     # Log final (immutable) distributions to W&B table
-    logger.info("Logging final distributions as W&B table")
     monitor.log_final_distributions()
 
     # Write final checkpoint
