@@ -6,7 +6,7 @@ from pydantic import Field
 from prime_rl.utils.pydantic_config import BaseConfig, BaseSettings, get_all_fields
 from prime_rl.utils.utils import rgetattr, rsetattr
 
-ServerType = Literal["vllm"]
+ServerType = Literal["vllm", "sglang"]
 
 # TODO: Set thinking/ solution budget
 

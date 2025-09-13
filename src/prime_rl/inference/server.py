@@ -1,8 +1,9 @@
 from prime_rl.inference.backends.vllm import VLLMBackend
+from prime_rl.inference.backends.sglang import SGLangBackend
 from prime_rl.inference.config import InferenceConfig
 from prime_rl.utils.pydantic_config import parse_argv
 
-BACKENDS = {"vllm": VLLMBackend}
+BACKENDS = {"vllm": VLLMBackend, "sglang": SGLangBackend}
 
 
 def main():
