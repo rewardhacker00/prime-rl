@@ -43,6 +43,7 @@ from prime_rl.utils.utils import (
     to_col_format,
 )
 import numpy as np
+from prime_rl.orchestrator.vf_adapters import apply_verifiers_adapters
 
 
 @clean_exit
@@ -67,6 +68,19 @@ async def orchestrate(config: OrchestratorConfig):
     # Load tokenizer
     logger.info(f"Initializing tokenizer for {config.model.name}")
     tokenizer = AutoTokenizer.from_pretrained(config.model.name, trust_remote_code=config.model.trust_remote_code)
+
+    # Apply Verifiers adapters for non-vLLM backends (e.g., SGLang)
+    try:
+        apply_verifiers_adapters(config.client.server_type)
+    except Exception as e:
+        logger.warning(f"Failed to apply verifiers adapters: {e}")
+
+    # Note: When using SGLang, training must recompute logprobs on the trainer.
+    # The RL entrypoint enforces this; warn here for standalone orchestrator runs.
+    if config.client.server_type == "sglang":
+        logger.warning(
+            "SGLang backend in use: ensure your trainer runs with recompute_logprobs=true."
+        )
 
     # Setup monitor
     logger.info(f"Initializing monitor ({config.wandb})")

@@ -55,6 +55,12 @@ def server(config: InferenceConfig, sglang_args: list[str]):
     _remove_route("/update_weights_from_tensor")
     app.post("/update_weights_from_tensor")(_update_from_tensor)
 
+    _remove_route("/flush_cache")
+
+    @app.post("/flush_cache")
+    async def _flush_cache(request: Request):
+        return {"status": "ok"}
+
     launch_server(server_args)
 
 

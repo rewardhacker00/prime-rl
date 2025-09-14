@@ -412,6 +412,17 @@ def rl(config: RLConfig):
     logger.info("Starting RL run")
     logger.debug(f"RL start command: {' '.join(start_command)}")
 
+    # Guard: SGLang requires trainer-side logprob recomputation.
+    # Fails fast to avoid GRPO using zero/invalid old_logprobs.
+    if (
+        config.orchestrator.client.server_type == "sglang"
+        and not config.trainer.recompute_logprobs
+    ):
+        raise ValueError(
+            "SGLang backend requires trainer.recompute_logprobs=true. "
+            "Set it in the trainer config or pass --trainer.recompute-logprobs true."
+        )
+
     # Prepare paths to communicate with the trainer
     log_dir = get_log_dir(config.output_dir)
     ckpt_dir = get_ckpt_dir(config.output_dir)
