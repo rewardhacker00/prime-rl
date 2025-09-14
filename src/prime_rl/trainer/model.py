@@ -1,6 +1,7 @@
 import logging
 
 import torch
+import torch.distributed.checkpoint as dcp
 import torch.nn as nn
 from beartype import beartype as typechecker
 from jaxtyping import Float, Int, jaxtyped
@@ -45,18 +46,19 @@ def get_load_balance_stats(model: nn.Module, reset_stats: bool = True) -> dict[s
     return {"max_vio": torch.tensor(per_layer_max_vio)}
 
 
-def get_model(config: ModelConfig) -> nn.Module:
+def get_model(config: ModelConfig, device: torch.device = torch.device("cpu")) -> nn.Module:
     config_model = AutoConfig.from_pretrained(
         config.name, attn_implementation=config.attn, trust_remote_code=config.trust_remote_code
     )
     config_model.use_cache = False
 
-    model_cls = AutoLigerKernelForCausalLM if config.liger_kernel else AutoModelForCausalLM
-    model = model_cls.from_pretrained(
-        pretrained_model_name_or_path=config.name,
-        config=config_model,
-        trust_remote_code=config.trust_remote_code,
-    )
+    with device:
+        model_cls = AutoLigerKernelForCausalLM if config.liger_kernel else AutoModelForCausalLM
+        model = model_cls.from_pretrained(
+            pretrained_model_name_or_path=config.name,
+            config=config_model,
+            trust_remote_code=config.trust_remote_code,
+        )
 
     return model
 
@@ -86,6 +88,18 @@ def setup_fsdp(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDim
     fully_shard(model, mesh=hsdp_mesh, mp_policy=mp_policy, reshard_after_forward=config.reshard_after_forward)
 
 
+def load_dcp_from_hf(model: nn.Module, config: ModelConfig):
+    from huggingface_hub import snapshot_download
+    from torch.distributed.checkpoint import HuggingFaceStorageReader
+
+    path_snapshot = snapshot_download(repo_id=config.name, repo_type="model")
+    model.to_empty(device="cuda")
+    dcp.load(
+        model.state_dict(),
+        storage_reader=HuggingFaceStorageReader(path=path_snapshot),
+    )
+
+
 def reshard_module(model: nn.Module):
     for module in model.modules():
         if isinstance(module, FSDPModule):
@@ -100,8 +114,15 @@ def apply_ac(model: nn.Module, ac_config: ActivationCheckpointConfig):
 
 
 def setup_model(config: ModelConfig, parallel_dims: ParallelDims) -> nn.Module:
-    model = get_model(config)
-    setup_fsdp(model, config, parallel_dims)
+    if torch.__version__.startswith("2.7"):
+        # TODO: Remove this once we dont support torch 2.7
+        # Torch 2.7 has a HF Reader but it doesnt support small models without model.safetensors.index.json
+        model = get_model(config, device=torch.device("cpu"))
+        setup_fsdp(model, config, parallel_dims)
+    else:
+        model = get_model(config, device=torch.device("meta"))
+        setup_fsdp(model, config, parallel_dims)
+        load_dcp_from_hf(model, config)
     if config.ac is not None:
         apply_ac(model, config.ac)
     if config.compile:
