@@ -117,7 +117,12 @@ async def orchestrate(config: OrchestratorConfig):
         logger.info(f"Resuming training from checkpoint step `{config.ckpt.resume_step}`")
         ckpt_manager.load(progress, buffer, step=config.ckpt.resume_step)
         ckpt_step = max(progress.step - config.async_level, 0)
-        await update_weights(client, get_weights_dir(config.output_dir), ckpt_step)
+        await update_weights(
+            client,
+            get_weights_dir(config.output_dir),
+            ckpt_step,
+            server_type=config.client.server_type,
+        )
         if config.client.server_type == "sglang":
             await flush_cache(client)
     else:
@@ -173,7 +178,12 @@ async def orchestrate(config: OrchestratorConfig):
             # Update the weights
             logger.info(f"Updating weights to weight checkpoint {ckpt_step}")
             update_weights_start_time = time.time()
-            await update_weights(client, get_weights_dir(config.output_dir), ckpt_step)
+            await update_weights(
+                client,
+                get_weights_dir(config.output_dir),
+                ckpt_step,
+                server_type=config.client.server_type,
+            )
             if config.client.server_type == "sglang":
                 await flush_cache(client)
             update_weights_time = time.time() - update_weights_start_time
