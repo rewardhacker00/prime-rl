@@ -2662,7 +2662,7 @@ requires-dist = [
     { name = "textarena", specifier = ">=0.6.16" },
     { name = "tomli", specifier = ">=2.2.1" },
     { name = "tomli-w" },
-    { name = "torch", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/test/cu128" },
+    { name = "torch", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/test/cu128" },
     { name = "torch", marker = "extra == 'vf'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/test/cu128" },
     { name = "torchao", specifier = ">=0.6.0" },
     { name = "torchdata", specifier = ">=0.11.0" },
