@@ -2596,6 +2596,7 @@ vf = [
     { name = "skywork-math" },
     { name = "tau2" },
     { name = "tau2-bench" },
+    { name = "torch" },
     { name = "unscramble" },
 ]
 
@@ -2662,6 +2663,7 @@ requires-dist = [
     { name = "tomli", specifier = ">=2.2.1" },
     { name = "tomli-w" },
     { name = "torch", specifier = "==2.7.1", index = "https://download.pytorch.org/whl/test/cu128" },
+    { name = "torch", marker = "extra == 'vf'", specifier = ">=2.7.0", index = "https://download.pytorch.org/whl/test/cu128" },
     { name = "torchao", specifier = ">=0.6.0" },
     { name = "torchdata", specifier = ">=0.11.0" },
     { name = "transformers", specifier = ">=4.56.0" },

@@ -4,7 +4,8 @@ from typing import Any
 import httpx
 from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
-from sglang.srt.entrypoints.http_server import _global_state, app, launch_server
+import sglang.srt.entrypoints.http_server as shttp
+from sglang.srt.entrypoints.http_server import app, launch_server
 from sglang.srt.managers.io_struct import (
     UpdateWeightFromDiskReqInput,
     UpdateWeightsFromTensorReqInput,
@@ -26,7 +27,7 @@ def server(config: InferenceConfig, sglang_args: list[str]):
 
     async def _update(path: str, request: Request):
         obj = UpdateWeightFromDiskReqInput(model_path=path)
-        success, message, _ = await _global_state.tokenizer_manager.update_weights_from_disk(obj, request)
+        success, message, _ = await shttp._global_state.tokenizer_manager.update_weights_from_disk(obj, request)
         if not success:
             raise HTTPException(400, message)
         return {"status": "ok"}
@@ -46,7 +47,7 @@ def server(config: InferenceConfig, sglang_args: list[str]):
     async def _update_from_tensor(request: Request):
         data = await request.json()
         obj = UpdateWeightsFromTensorReqInput(**data)
-        success, message = await _global_state.tokenizer_manager.update_weights_from_tensor(obj, request)
+        success, message = await shttp._global_state.tokenizer_manager.update_weights_from_tensor(obj, request)
         if not success:
             raise HTTPException(400, message)
         return {"status": "ok"}
