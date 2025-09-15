@@ -124,9 +124,14 @@ def apply_sampling_transforms(logits, temperature=1.0, top_p=1.0):
         probs = torch.softmax(t, dim=-1)
         sorted_probs, idx = torch.sort(probs, descending=True)
         cum = sorted_probs.cumsum(dim=-1)
-        mask = cum > top_p
-        sorted_probs[mask] = 0
+        mask = cum > max(top_p, 0.0)
+        # Ensure at least the highest probability token remains in the nucleus
+        mask[..., 0] = False
+        sorted_probs = sorted_probs.masked_fill(mask, 0.0)
+        kept = sorted_probs.sum(dim=-1, keepdim=True)
+        # If everything was masked (e.g., pathological top_p values), fall back to uniform over kept entries
+        kept = torch.where(kept <= 0, torch.ones_like(kept), kept)
         probs = torch.zeros_like(probs).scatter(-1, idx, sorted_probs)
-        probs = probs / probs.sum(dim=-1, keepdim=True)
-        return torch.log(probs + 1e-12).tolist()
+        probs = probs / kept
+        return torch.log(probs.clamp_min(1e-12)).tolist()
     return torch.log_softmax(t, dim=-1).tolist()
