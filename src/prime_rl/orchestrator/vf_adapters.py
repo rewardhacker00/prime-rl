@@ -3,10 +3,7 @@ from __future__ import annotations
 """
 Adapters to make Verifiers env parsing robust to non-vLLM backends (e.g., SGLang).
 
-Context: Verifiers' Environment.process_chat_format_vllm assumes vLLM-style
-logprobs where tokens are returned as strings like "token_id:<int>". Some
-OpenAI-compatible servers (e.g., SGLang) may return raw token strings instead,
-causing parsing to fail. We patch the method to derive assistant token ids
+Context: We patch the method to derive assistant token ids
 directly from the chat template and fill logprobs with zeros, which is safe
 when trainer-side logprobs recomputation is enabled.
 """
