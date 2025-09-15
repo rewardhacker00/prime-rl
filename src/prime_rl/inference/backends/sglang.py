@@ -59,7 +59,10 @@ def server(config: InferenceConfig, sglang_args: list[str]):
 
     @app.post("/flush_cache")
     async def _flush_cache(request: Request):
-        return {"status": "ok"}
+        result = await shttp._global_state.tokenizer_manager.flush_cache()
+        if getattr(result, "success", False):
+            return {"status": "ok"}
+        raise HTTPException(400, "Cache flush failed")
 
     launch_server(server_args)
 
