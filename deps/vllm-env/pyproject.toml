@@ -4,8 +4,8 @@ version = "0.0.0"
 description = "Isolated vLLM environment for prime-rl"
 requires-python = "~=3.12.0"
 dependencies = [
-    "torch==2.7.1+cu128",
-    "vllm==0.10.1.1",
+    "torch==2.8.0+cu128",
+    "vllm==0.10.2",
 ]
 
 [tool.uv]
@@ -18,4 +18,3 @@ torch = [{ index = "pytorch-cu128" }]
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/test/cu128"
 explicit = true
-
