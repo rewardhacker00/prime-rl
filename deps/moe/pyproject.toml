@@ -33,7 +33,7 @@ dependencies = [
     "uvloop>=0.21.0",
     "vllm==0.10.2",
     "sglang==0.5.2",
-    "sgl-kernel==0.3.9",
+    "sgl-kernel==0.3.10",
     "wandb>=0.20.1",
     "lovely-tensors>=0.1.18",
     "rich>=14.0.0",
