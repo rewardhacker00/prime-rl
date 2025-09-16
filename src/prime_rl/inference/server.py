@@ -15,9 +15,7 @@ def _get_backend_cls(server_type: str):
         try:
             from prime_rl.inference.backends.sglang import SGLangBackend
         except ModuleNotFoundError as e:
-            raise RuntimeError(
-                "SGLang backend requested but not installed."
-            ) from e
+            raise RuntimeError("SGLang backend requested but not installed.") from e
         return SGLangBackend
 
 

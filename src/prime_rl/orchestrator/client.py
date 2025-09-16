@@ -9,7 +9,7 @@ from openai import AsyncOpenAI, NotFoundError
 
 from prime_rl.orchestrator.config import ClientConfig
 from prime_rl.utils.logger import get_logger
-from prime_rl.utils.utils import get_weight_ckpt_model_path, get_step_path
+from prime_rl.utils.utils import get_step_path, get_weight_ckpt_model_path
 
 
 def setup_client(client_config: ClientConfig) -> AsyncOpenAI:

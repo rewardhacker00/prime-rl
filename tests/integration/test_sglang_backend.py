@@ -23,4 +23,5 @@ def test_chat_and_admin(sglang_server):
         assert r.status_code == 200
         r = await client.post(base + "/flush_cache", cast_to=Response, body={})
         assert r.status_code == 200
+
     asyncio.run(run())

@@ -2,9 +2,9 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import sglang.srt.entrypoints.http_server as shttp
 from fastapi import HTTPException, Request
 from fastapi.routing import APIRoute
-import sglang.srt.entrypoints.http_server as shttp
 from sglang.srt.entrypoints.http_server import app, launch_server
 from sglang.srt.managers.io_struct import (
     UpdateWeightFromDiskReqInput,

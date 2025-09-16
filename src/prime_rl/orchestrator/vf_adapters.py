@@ -11,8 +11,7 @@ from loguru import logger
 
 
 def apply_verifiers_adapters(server_type: str) -> None:
-    """Apply runtime patches to Verifiers for specific server types.
-    """
+    """Apply runtime patches to Verifiers for specific server types."""
 
     if server_type != "sglang":
         return
@@ -95,9 +94,7 @@ def apply_verifiers_adapters(server_type: str) -> None:
         if _responses_have_usable_logprobs(responses):
             _map_logprobs_to_token_ids(responses, tokenizer)
             return _orig(self, prompt, completion, state, processing_class, mask_env_responses)
-        raise ValueError(
-            "SGLang response lacked logprobs; enable trainer.recompute_logprobs"
-        )
+        raise ValueError("SGLang response lacked logprobs; enable trainer.recompute_logprobs")
 
     # Apply the patch
     setattr(Environment, "process_chat_format_vllm", _patched_process_chat_format_vllm)
