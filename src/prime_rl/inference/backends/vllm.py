@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
+import httpx
 import uvloop
 import vllm.envs as envs
 from fastapi import Request
@@ -23,8 +24,6 @@ from vllm.entrypoints.openai.cli_args import make_arg_parser, validate_parsed_se
 from vllm.entrypoints.openai.tool_parsers import ToolParserManager
 from vllm.logger import init_logger
 from vllm.utils import FlexibleArgumentParser
-
-import httpx
 
 from prime_rl.inference.backends.base import BaseBackend
 from prime_rl.inference.config import InferenceConfig
