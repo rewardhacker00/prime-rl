@@ -75,12 +75,8 @@ async def orchestrate(config: OrchestratorConfig):
     except Exception as e:
         logger.warning(f"Failed to apply verifiers adapters: {e}")
 
-    # Note: When using SGLang, training must recompute logprobs on the trainer.
-    # The RL entrypoint enforces this; warn here for standalone orchestrator runs.
     if config.client.server_type == "sglang":
-        logger.warning(
-            "SGLang backend in use: ensure your trainer runs with recompute_logprobs=true."
-        )
+        logger.info("SGLang backend in use; ensure the server is configured with logprob support (v0.5.2+).")
 
     # Setup monitor
     logger.info(f"Initializing monitor ({config.wandb})")

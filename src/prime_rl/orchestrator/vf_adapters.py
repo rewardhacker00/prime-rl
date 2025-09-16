@@ -3,9 +3,6 @@ from __future__ import annotations
 """
 Adapters to make Verifiers env parsing robust to non-vLLM backends (e.g., SGLang).
 
-Context: We patch the method to derive assistant token ids
-directly from the chat template and fill logprobs with zeros, which is safe
-when trainer-side logprobs recomputation is enabled.
 """
 
 from typing import Any, List, Tuple
@@ -15,11 +12,6 @@ from loguru import logger
 
 def apply_verifiers_adapters(server_type: str) -> None:
     """Apply runtime patches to Verifiers for specific server types.
-
-    Currently, for server_type == "sglang", we replace
-    Environment.process_chat_format_vllm to avoid relying on server-returned
-    per-token ids/logprobs for assistant turns. Instead, we compute token ids
-    via the tokenizer chat template and set per-token logprobs to zero.
     """
 
     if server_type != "sglang":
@@ -34,8 +26,26 @@ def apply_verifiers_adapters(server_type: str) -> None:
 
     # Keep a reference to the original implementation in case we need it later
     _orig = getattr(Environment, "process_chat_format_vllm", None)
+    if _orig is None:
+        logger.debug("Environment.process_chat_format_vllm missing; skipping SGLang adapter")
+        return
 
     async_warning_once = {"emitted": False}
+
+    def _responses_have_logprobs(responses: list[Any]) -> bool:
+        for response in responses:
+            try:
+                choices = getattr(response, "choices", None)
+                if not choices:
+                    continue
+                choice = choices[0]
+                logprobs = getattr(choice, "logprobs", None)
+                content = getattr(logprobs, "content", None) if logprobs is not None else None
+                if content:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def _patched_process_chat_format_vllm(
         self: Any,
@@ -45,14 +55,12 @@ def apply_verifiers_adapters(server_type: str) -> None:
         processing_class: Any,
         mask_env_responses: bool = False,
     ) -> Tuple[List[int], List[int], List[int], List[int], List[float]]:
-        """Patched version that derives assistant token ids via chat template.
-
-        Differences from upstream:
-        - For assistant turns, do NOT consume response.logprobs tokens.
-          Instead, compute ids via apply_chat_template delta and set logprobs=0.
-        - For user/tool turns, keep the original delta logic.
-        """
+        """Patched version that preserves native logprobs when available."""
         responses = state["responses"]
+
+        if _responses_have_logprobs(responses):
+            return _orig(self, prompt, completion, state, processing_class, mask_env_responses)
+
         responses_idx = 0
         zipped = []
         for turn in completion:
@@ -64,7 +72,6 @@ def apply_verifiers_adapters(server_type: str) -> None:
         assert len(responses) == responses_idx, "Responses not fully consumed"
         assert len(zipped) == len(completion), "Length mismatch"
 
-        # Tokenize the prompt with a generation prompt for the first assistant
         prompt_ids: list[int] = processing_class.apply_chat_template(
             conversation=prompt,  # type: ignore
             add_generation_prompt=True,
@@ -78,9 +85,7 @@ def apply_verifiers_adapters(server_type: str) -> None:
         i = 0
         while i < len(zipped):
             message, response = zipped[i]
-            # assistant case -- derive ids from chat template and zero logprobs
             if message["role"] == "assistant":
-                # Use add_generation_prompt for the first assistant turn only
                 has_emitted_assistant = any(m.get("role") == "assistant" for m in messages_consumed)
                 token_prefix: list[int] = processing_class.apply_chat_template(
                     conversation=messages_consumed,  # type: ignore
@@ -96,20 +101,17 @@ def apply_verifiers_adapters(server_type: str) -> None:
                 completion_turn_mask = [1] * len(completion_turn_ids)
                 completion_turn_logprobs = [0.0] * len(completion_turn_ids)
 
-                # Append
                 completion_ids.extend(completion_turn_ids)
                 completion_mask.extend(completion_turn_mask)
                 completion_logprobs.extend(completion_turn_logprobs)
                 messages_consumed.append(message)
                 i += 1
 
-                # Emit a one-time warning to encourage recompute_logprobs
                 if not async_warning_once["emitted"]:
                     logger.warning(
-                        "Using SGLang adapter: assistant logprobs set to 0; enable trainer.recompute_logprobs for correctness."
+                        "SGLang response lacked logprobs; synthesizing zeroed values. Enable trainer.recompute_logprobs or upgrade the server."
                     )
                     async_warning_once["emitted"] = True
-            # user/tool case -- use original delta logic
             else:
                 assert message["role"] == "user" or message["role"] == "tool"
                 consecutive_messages = [message]
@@ -149,4 +151,3 @@ def apply_verifiers_adapters(server_type: str) -> None:
     # Apply the patch
     setattr(Environment, "process_chat_format_vllm", _patched_process_chat_format_vllm)
     logger.info("Applied Verifiers adapter: patched process_chat_format_vllm for SGLang backend")
-
