@@ -2666,7 +2666,7 @@ requires-dist = [
     { name = "reverse-text", marker = "extra == 'vf'", specifier = ">=0.1.4", index = "https://hub.primeintellect.ai/primeintellect/simple/" },
     { name = "rich", specifier = ">=14.0.0" },
     { name = "sentencepiece", specifier = ">=0.2.0" },
-    { name = "sgl-kernel", specifier = "==0.3.9" },
+    { name = "sgl-kernel", specifier = "==0.3.10" },
     { name = "sglang", specifier = "==0.5.2" },
     { name = "simpleqa", marker = "extra == 'vf'", specifier = ">=0.1.1", index = "https://hub.primeintellect.ai/primeintellect/simple/" },
     { name = "skywork-math", marker = "extra == 'vf'", specifier = ">=0.1.7", index = "https://hub.primeintellect.ai/primeintellect/simple/" },
@@ -3480,10 +3480,10 @@ wheels = [
 
 [[package]]
 name = "sgl-kernel"
-version = "0.3.9"
+version = "0.3.10"
 source = { registry = "https://pypi.org/simple" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/13/a6843ba47fc188b98fd5fd00b613514871daa911c9cea922d4b45b2b3e49/sgl_kernel-0.3.9-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:7541f82e378cab6059034ca698c6157170325f6f25336101001e878cf604d867", size = 378865481, upload-time = "2025-09-09T09:29:11.627Z" },
+    { url = "https://files.pythonhosted.org/packages/64/af/4941af6f53435e1e0967a580db13914d26e1ac147d82618a14ec4fad089a/sgl_kernel-0.3.10-cp310-abi3-manylinux2014_x86_64.whl", hash = "sha256:871377dfdab6722a52dc3ca5adde11e460822d3fcd63f44dade3b4187adfe8be", size = 378760588, upload-time = "2025-09-16T00:40:29.342Z" },
 ]
 
 [[package]]
