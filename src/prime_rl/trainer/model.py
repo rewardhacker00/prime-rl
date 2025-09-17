@@ -77,13 +77,6 @@ def setup_fsdp(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDim
     # TODO: Support dp_replicate
     hsdp_mesh = parallel_dims.world_mesh["dp_shard_cp"]
 
-    fully_shard(
-        model.model.embed_tokens,
-        mesh=hsdp_mesh,
-        mp_policy=mp_policy,
-        reshard_after_forward=config.reshard_after_forward,
-    )
-
     for transformer_block in model.model.layers:
         fully_shard(
             transformer_block,
@@ -91,12 +84,23 @@ def setup_fsdp(model: nn.Module, config: ModelConfig, parallel_dims: ParallelDim
             mp_policy=mp_policy,
             reshard_after_forward=config.reshard_after_forward,
         )
-    fully_shard(
-        [model.lm_head, model.model.norm],
-        mesh=hsdp_mesh,
-        mp_policy=mp_policy,
-        reshard_after_forward=config.reshard_after_forward,
-    )
+
+    if hasattr(model, "config") and not model.config.tie_word_embeddings:
+        # This optimization breaks weight tying
+        fully_shard(
+            model.model.embed_tokens,
+            mesh=hsdp_mesh,
+            mp_policy=mp_policy,
+            reshard_after_forward=config.reshard_after_forward,
+        )
+        fully_shard(
+            [model.lm_head, model.model.norm],
+            mesh=hsdp_mesh,
+            mp_policy=mp_policy,
+            reshard_after_forward=False,
+        )
+    else:
+        get_logger().warning("Model is tied word embeddings, so not doing the last layer not resharding optimization")
 
     fully_shard(model, mesh=hsdp_mesh, mp_policy=mp_policy, reshard_after_forward=config.reshard_after_forward)
 
@@ -110,8 +114,34 @@ def load_dcp_from_hf(model: nn.Module, config: ModelConfig):
     dcp.load(
         model.state_dict(),
         storage_reader=HuggingFaceStorageReader(path=path_snapshot),
+        # Note: This allow is needed by weight tying but could cause silent issues
         planner=DefaultLoadPlanner(allow_partial_load=True),
     )
+    fix_model_post_empty(model)
+
+
+def can_load_dcp_from_hf(model: nn.Module):
+    """Whether the model will be loaded correctly by load_dcp_from_hf.
+
+    The main issue is with anything that is not in the checkpoint.
+    This is usually any non-persistent buffers.
+    """
+    buffer_names = [name for name, _ in model.named_buffers()]
+    # HF standard transformer model
+    if len(buffer_names) == 1 and buffer_names[0] == "model.rotary_emb.inv_freq":
+        return True
+
+    get_logger().warning(f"Model cannot be loaded using meta device because of buffers: {buffer_names}")
+    return False
+
+
+def fix_model_post_empty(model: nn.Module):
+    buffer_names = [name for name, _ in model.named_buffers()]
+    # HF standard transformer model
+    if len(buffer_names) == 1 and buffer_names[0] == "model.rotary_emb.inv_freq":
+        rotary_emb = model.model.rotary_emb
+        inv_freq, rotary_emb.attention_scaling = rotary_emb.rope_init_fn(rotary_emb.config, rotary_emb.inv_freq.device)
+        rotary_emb.inv_freq.copy_(inv_freq)
 
 
 def reshard_module(model: nn.Module):
@@ -135,8 +165,9 @@ def apply_compile(model: nn.Module, compile_config: CompileConfig):
 
 
 def setup_model(config: ModelConfig, parallel_dims: ParallelDims) -> nn.Module:
-    device = torch.device("cpu")
-    model = get_model(config, device=device)
+    model = get_model(config, device=torch.device("meta"))
+    if not can_load_dcp_from_hf(model):
+        model = get_model(config, device=torch.device("cpu"))
 
     # the right order is AC -> Compile -> FSDP
     if config.ac is not None:
@@ -146,11 +177,8 @@ def setup_model(config: ModelConfig, parallel_dims: ParallelDims) -> nn.Module:
 
     setup_fsdp(model, config, parallel_dims)
 
-    # if device == torch.device("meta"):
-    # TODO: This is used if the model is loaded with meta device to save cpu memory
-    # However, the loading seems to be wrong as the loss and reward curves are different
-    # load_dcp_from_hf(model, config)
-    #     load_dcp_from_hf(model, config)
+    if can_load_dcp_from_hf(model):
+        load_dcp_from_hf(model, config)
 
     return model
 
