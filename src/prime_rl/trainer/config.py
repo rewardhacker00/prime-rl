@@ -98,6 +98,27 @@ class ModelConfig(BaseConfig):
         ),
     ] = False
 
+    log_signature: Annotated[
+        bool,
+        Field(
+            description="Whether to log the model signature after loading the model.",
+        ),
+    ] = False
+
+    load_using_meta: Annotated[
+        bool,
+        Field(
+            description="Whether to load the model using meta device then load from HF ckpt.",
+        ),
+    ] = True
+
+    optimization_dtype: Annotated[
+        Literal["bfloat16", "float32"],
+        Field(
+            description="The dtype to use for the model optimization.",
+        ),
+    ] = "float32"
+
     @model_validator(mode="after")
     def _map_model_name_for_moe(self):
         """Map model name if it exists in MOE_MODEL_MAPS."""
