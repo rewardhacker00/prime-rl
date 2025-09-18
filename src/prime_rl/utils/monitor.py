@@ -29,6 +29,7 @@ class WandbMonitor:
         self.config = config
         self.logger = get_logger()
         self.history: list[dict[str, Any]] = []
+        self.output_dir = output_dir
 
         rank = int(os.environ.get("RANK", os.environ.get("DP_RANK", "0")))
         self.enabled = self.config is not None
@@ -235,6 +236,16 @@ class WandbMonitor:
         df = pd.DataFrame(self.distributions)
         table = wandb.Table(dataframe=df)
         wandb.log({"final-distributions": table})
+
+    def save_final_summary(self, filename: str = "final_summary.json") -> None:
+        """Save final summary to W&B table."""
+        if not self.is_master or not self.config:
+            return
+        self.logger.info("Saving final summary to file")
+        dir_path = self.output_dir / f"run-{self.wandb.id}"
+        dir_path.mkdir(parents=True, exist_ok=True)
+        with open(dir_path / filename, "w") as f:
+            json.dump(wandb.summary._as_dict(), f)
 
 
 _MONITOR: WandbMonitor | None = None
