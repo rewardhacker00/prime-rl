@@ -109,8 +109,21 @@ def test_model_with_sequence_packing(model, correct_position_ids):
     torch.cuda.is_available() and torch.cuda.get_device_capability(0)[0] < 9,
     reason="Requires GPU 0 compute capability >= 9.0",
 )
-def test_moe():
-    config = ModelConfig(name="Jackmin108/debug-moe-0.5B", attn="sdpa", trust_remote_code=True)
+def test_moe_custom_impl():
+    config = ModelConfig(name="Jackmin108/glm-0.5B", attn="sdpa", trust_remote_code=True, moe_use_grouped_mm=False)
+    model = get_model(config)
+    model = model.to("cuda")
+    with torch.autocast("cuda", dtype=torch.bfloat16):
+        inputs_ids = torch.randint(0, 100, (BS, SEQ_LEN)).to("cuda")
+        outputs = model(input_ids=inputs_ids).logits
+
+        assert outputs.shape == (BS, SEQ_LEN, model.config.vocab_size)
+
+
+@pytest.mark.skip(reason="need special token for meta stuff in ci")
+@pytest.mark.parametrize("model_name", ["meta-llama/Llama-3.2-1B-Instruct"])
+def test_model_forward_custom_impl(model_name):
+    config = ModelConfig(name=model_name, impl="custom", attn="sdpa")
     model = get_model(config)
     model = model.to("cuda")
     with torch.autocast("cuda", dtype=torch.bfloat16):
