@@ -146,7 +146,7 @@ SGLANG_SERVER_CMD = [
     "inference",
     "@",
     "configs/reverse_text/infer.toml",
-    "--server.server_type",
+    "--server.type",
     "sglang",
 ]
 

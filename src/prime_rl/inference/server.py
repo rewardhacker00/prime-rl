@@ -1,35 +1,35 @@
+from collections.abc import Callable
+
 from prime_rl.inference.config import InferenceConfig
 from prime_rl.utils.pydantic_config import parse_argv
 
+BackendLauncher = Callable[[InferenceConfig], None]
 
-def _get_backend_cls(server_type: str):
-    """Return the backend class for the given server type.
-    Imports are done lazily so optional backends (e.g., sglang) do not cause
-    import-time failures when the dependency isn't installed.
+
+def _get_backend(server_type: str) -> BackendLauncher:
+    """Return the backend launcher for the given server type.
     """
-    if server_type == "vllm":
-        from prime_rl.inference.backends.vllm import VLLMBackend
 
-        return VLLMBackend
+    if server_type == "vllm":
+        from prime_rl.inference.backends.vllm import startup as launch_vllm
+
+        return launch_vllm
     if server_type == "sglang":
         try:
-            from prime_rl.inference.backends.sglang import SGLangBackend
-        except ModuleNotFoundError as e:
-            raise RuntimeError("SGLang backend requested but not installed.") from e
-        return SGLangBackend
+            from prime_rl.inference.backends.sglang import startup as launch_sglang
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("SGLang backend requested but not installed.") from exc
+        return launch_sglang
+    raise ValueError(f"Unsupported server type: {server_type}")
 
 
-def main():
+def main() -> None:
     config = parse_argv(InferenceConfig, allow_extras=True)
-    server_type = config.server.server_type
-    # Preserve sglang-specific argument transformation from upstream
+    server_type = config.server.type
     if server_type == "sglang":
         config.set_unknown_args(config.to_sglang() + config.get_unknown_args())
-    backend_cls = _get_backend_cls(server_type)
-    if backend_cls is None:
-        raise ValueError(f"Unsupported server type: {server_type}")
-    backend = backend_cls()
-    backend.startup(config)
+    launcher = _get_backend(server_type)
+    launcher(config)
 
 
 if __name__ == "__main__":

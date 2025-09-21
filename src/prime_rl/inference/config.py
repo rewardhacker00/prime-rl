@@ -8,19 +8,17 @@ from prime_rl.utils.utils import rgetattr, rsetattr
 
 ServerType = Literal["vllm", "sglang"]
 
-# TODO: Set thinking/ solution budget
-
 
 class ServerConfig(BaseConfig):
     """Configures the inference server."""
 
     host: Annotated[str | None, Field(description="The host to bind to.")] = None
     port: Annotated[int, Field(description="The port to bind to.")] = 8000
-    server_type: Annotated[ServerType, Field(description="Backend type.")] = "vllm"
+    type: Annotated[ServerType, Field(description="Backend type.")] = "vllm"
 
 
 class ParallelConfig(BaseConfig):
-    """Configures multi-node and multi-GPU setups through different types of parallelism (TP, DP, PP)."""
+    """Configures multi-node and multi-GPU setups through different types of parallelism (TP, DP)."""
 
     tp: Annotated[
         int,
@@ -37,17 +35,12 @@ class ParallelConfig(BaseConfig):
         ),
     ] = 1
 
-    pp: Annotated[
-        int,
-        Field(description="The pipeline parallel size. It is passed to vLLM as `--pipeline-parallel-size`"),
-    ] = 1
-
     def __str__(self) -> str:
-        return f"tp={self.tp} dp={self.dp} pp={self.pp}"
+        return f"tp={self.tp} dp={self.dp}"
 
 
 class ModelConfig(BaseConfig):
-    """Configures the inference model. Most arguments are passed directly to the vLLM LLM class (https://docs.vllm.ai/en/latest/api/vllm.LLM.html)."""
+    """Configures the inference model. Most arguments are passed directly to the vLLM LLM class."""
 
     name: Annotated[
         str,
@@ -59,21 +52,21 @@ class ModelConfig(BaseConfig):
     dtype: Annotated[
         Literal["auto", "float16", "bfloat16", "float32"],
         Field(
-            description="Data type for model weights and activations. If 'auto' will use FP16 precision for FP32 and FP16 models, and BF16 precision for BF16 models. Passed to vLLM as `--dtype`",
+            description="Data type for model weights and activations. Passed to vLLM as `--dtype`",
         ),
     ] = "auto"
 
     max_model_len: Annotated[
         int | None,
         Field(
-            description="Maximum model context length. If None, will use the maximum context length from model config. Passed to vLLM as `--max-model-len`",
+            description="Maximum model context length. If None, will use the maximum context length from the model config.",
         ),
     ] = None
 
     enforce_eager: Annotated[
         bool,
         Field(
-            description="Whether to enforce eager mode. If False, will use PyTorch eager and cuda graphs in hybrid for maximal performance. Passed to vLLM as `--enforce-eager`",
+            description="Whether to enforce eager mode. Passed to vLLM as `--enforce-eager`",
         ),
     ] = False
 
@@ -92,45 +85,32 @@ class ModelConfig(BaseConfig):
     ] = False
 
     tool_call_parser: Annotated[
-        str | None,
+        str,
         Field(
-            description="The tool call parser to use. For vLLM, defaults to 'hermes' if unset. For sglang, only pass values supported by sglang.",
+            description="The tool call parser to use. Passed to vLLM as `--tool-call-parser`.",
         ),
-    ] = None
-
-    quantization: Annotated[
-        str | None,
-        Field(description="Quantization to use. Passed to vLLM as `--quantization`"),
-    ] = None
+    ] = "hermes"
 
 
 class InferenceConfig(BaseSettings):
     """Configures inference."""
 
-    # The server configuration
     server: ServerConfig = ServerConfig()
-
-    # The model configuration
     model: ModelConfig = ModelConfig()
-
-    # The parallel configuration
     parallel: ParallelConfig = ParallelConfig()
+
+    gpu_memory_utilization: Annotated[
+        float,
+        Field(
+            description="The GPU memory utilization to use. Passed to vLLM as `--gpu-memory-utilization`",
+        ),
+    ] = 0.9
 
     seed: Annotated[
         int | None,
         Field(
             description="Seed the inference components. If None, no seeding is used. Passed to vLLM as `--seed`",
         ),
-    ] = None
-
-    mem_fraction_static: Annotated[
-        float | None,
-        Field(description="Static GPU memory fraction. Passed as `--mem-fraction-static`"),
-    ] = None
-
-    logprob_start_len: Annotated[
-        int | None,
-        Field(description="Start length for logprob calculation. Passed as `--logprob-start-len`"),
     ] = None
 
     def to_vllm(self) -> Namespace:
@@ -144,27 +124,19 @@ class InferenceConfig(BaseSettings):
             "model.max_model_len": "max_model_len",
             "model.enforce_eager": "enforce_eager",
             "model.trust_remote_code": "trust_remote_code",
-            "model.enable_auto_tool_choice": "enable_auto_tool_choice",  # requires underscores (unlike on CLI)
-            "model.tool_call_parser": "tool_call_parser",  # requires underscores (unlike on CLI)
+            "model.enable_auto_tool_choice": "enable_auto_tool_choice",
+            "model.tool_call_parser": "tool_call_parser",
             "parallel.tp": "tensor_parallel_size",
             "parallel.dp": "data_parallel_size",
-            "parallel.pp": "pipeline_parallel_size",
-            "model.quantization": "quantization",
-            "mem_fraction_static": "mem_fraction_static",
-            "logprob_start_len": "logprob_start_len",
+            "gpu_memory_utilization": "gpu_memory_utilization",
         }
 
         for key in get_all_fields(self):
             value = rgetattr(self, key.replace("-", "_"))
             rsetattr(namespace, to_vllm.get(key, key), value)
 
-        # Set defaults specific to vLLM
-        # Set `logprobs_mode` to `processed_logprobs` by default
+        # Ensure processed logprobs so the orchestrator sees transformed logprobs by default.
         rsetattr(namespace, "logprobs_mode", "processed_logprobs")
-
-        # Default tool_call_parser to 'hermes' for vLLM if not specified
-        if getattr(namespace, "tool_call_parser", None) is None:
-            rsetattr(namespace, "tool_call_parser", "hermes")
 
         return namespace
 
@@ -184,16 +156,13 @@ class InferenceConfig(BaseSettings):
             "--dp-size",
             str(self.parallel.dp),
             "--pp-size",
-            str(self.parallel.pp),
+            "1",
         ]
-        if self.model.quantization:
-            args += ["--quantization", self.model.quantization]
-        if self.mem_fraction_static is not None:
-            args += ["--mem-fraction-static", str(self.mem_fraction_static)]
+        parser = self.model.tool_call_parser
+        if parser == "hermes":
+            parser = None
+        if parser:
+            args += ["--tool-call-parser", parser]
         if self.seed is not None:
             args += ["--random-seed", str(self.seed)]
-        if self.logprob_start_len is not None:
-            args += ["--logprob-start-len", str(self.logprob_start_len)]
-        if self.model.tool_call_parser:
-            args += ["--tool-call-parser", self.model.tool_call_parser]
         return args

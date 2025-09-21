@@ -192,12 +192,11 @@ async def run_eval(
     run_eval_time = time.time() - run_eval_start_time
     logger.debug(f"Generated and scored rollouts in {run_eval_time:.2f}s")
 
-    if client_config.server_type == "sglang" and client_config.apply_sampling_transforms:
+    if client_config.server_type == "sglang":
         temp = sampling_args.get("temperature", 1.0)
-        top_p = sampling_args.get("top_p", 1.0)
         for s in generate_outputs.state:
             if "logits" in s and "logprobs" not in s:
-                s["logprobs"] = apply_sampling_transforms(s["logits"], temperature=temp, top_p=top_p)
+                s["logprobs"] = apply_sampling_transforms(s["logits"], temperature=temp)
 
     rewards = torch.tensor(generate_outputs.reward).reshape(-1, rollouts_per_example).float()
     responses = [state["responses"] for state in generate_outputs.state]

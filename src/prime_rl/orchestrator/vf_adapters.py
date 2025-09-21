@@ -16,6 +16,8 @@ def apply_verifiers_adapters(server_type: str) -> None:
     if server_type != "sglang":
         return
 
+    # TODO: Upstream these patches to `verifiers` so we can drop the runtime shim.
+
     try:
         # Delayed import to avoid hard dependency if verifiers isn't installed.
         from verifiers.envs.environment import Environment  # type: ignore

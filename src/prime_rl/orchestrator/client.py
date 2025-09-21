@@ -117,21 +117,9 @@ async def flush_cache(client: AsyncOpenAI) -> None:
         return
 
 
-def apply_sampling_transforms(logits, temperature=1.0, top_p=1.0):
+def apply_sampling_transforms(logits, temperature: float = 1.0):
+    """Match vLLM's temperature scaling when SGLang returns raw logits."""
+
     t = torch.tensor(logits, dtype=torch.float32)
     t = t / max(temperature, 1e-6)
-    if top_p < 1.0:
-        probs = torch.softmax(t, dim=-1)
-        sorted_probs, idx = torch.sort(probs, descending=True)
-        cum = sorted_probs.cumsum(dim=-1)
-        mask = cum > max(top_p, 0.0)
-        # Ensure at least the highest probability token remains in the nucleus
-        mask[..., 0] = False
-        sorted_probs = sorted_probs.masked_fill(mask, 0.0)
-        kept = sorted_probs.sum(dim=-1, keepdim=True)
-        # If everything was masked (e.g., pathological top_p values), fall back to uniform over kept entries
-        kept = torch.where(kept <= 0, torch.ones_like(kept), kept)
-        probs = torch.zeros_like(probs).scatter(-1, idx, sorted_probs)
-        probs = probs / kept
-        return torch.log(probs.clamp_min(1e-12)).tolist()
     return torch.log_softmax(t, dim=-1).tolist()
