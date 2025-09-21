@@ -195,8 +195,10 @@ async def run_eval(
     if client_config.server_type == "sglang":
         temp = sampling_args.get("temperature", 1.0)
         for s in generate_outputs.state:
-            if "logits" in s and "logprobs" not in s:
-                s["logprobs"] = apply_sampling_transforms(s["logits"], temperature=temp)
+            if "logits" not in s:
+                continue
+            assert "logprobs" not in s, "Expected raw logits from SGLang without precomputed logprobs"
+            s["logprobs"] = apply_sampling_transforms(s["logits"], temperature=temp)
 
     rewards = torch.tensor(generate_outputs.reward).reshape(-1, rollouts_per_example).float()
     responses = [state["responses"] for state in generate_outputs.state]
