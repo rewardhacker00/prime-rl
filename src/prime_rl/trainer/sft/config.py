@@ -45,6 +45,15 @@ class FakeDataConfig(BaseDataConfig):
     input_ids: Literal["increasing", "random"] = "increasing"
 
 
+class LossMaskConfig(BaseModel):
+    """Configures which message types contribute to the loss. If True, the loss_mask will be True and the message type will contribute to the loss."""
+
+    system: Annotated[bool, Field(description="Whether system messages contribute to the loss.")] = False
+    user: Annotated[bool, Field(description="Whether user messages contribute to the loss.")] = False
+    assistant: Annotated[bool, Field(description="Whether assistant messages contribute to the loss.")] = True
+    tool: Annotated[bool, Field(description="Whether tool messages contribute to the loss.")] = False
+
+
 class SFTDataConfig(BaseDataConfig):
     """Configures the data used for training."""
 
@@ -55,6 +64,9 @@ class SFTDataConfig(BaseDataConfig):
     )
     splits: Annotated[list[str], Field(description="Splits to use from the HF dataset.")] = ["train"]
     shuffle: Annotated[bool, Field(description="Whether to shuffle the dataset at the beginning of each epoch.")] = True
+
+    # Configuring
+    loss_mask: LossMaskConfig = LossMaskConfig()
 
 
 DataConfigType: TypeAlias = FakeDataConfig | SFTDataConfig
