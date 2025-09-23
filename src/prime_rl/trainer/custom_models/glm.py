@@ -19,7 +19,8 @@ from typing import Optional, Union
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torchtitan.models.moe import MoE, MoEArgs
+
+# from prime_rl.trainer.custom_models.layers.moe import MoE, MoEArgs
 from transformers.activations import ACT2FN
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.configuration_utils import PretrainedConfig
@@ -35,6 +36,13 @@ from transformers.processing_utils import Unpack
 from transformers.utils import TransformersKwargs, auto_docstring, can_return_tuple
 from transformers.utils.deprecation import deprecate_kwarg
 from transformers.utils.generic import check_model_inputs
+
+from prime_rl.trainer.custom_models.layers.moe import MoE, MoEArgs
+
+try:
+    from flash_attn import flash_attn_varlen_func
+except ImportError:
+    flash_attn_varlen_func = None
 
 
 class Glm4MoeConfig(PretrainedConfig):
@@ -203,7 +211,7 @@ class Glm4MoeConfig(PretrainedConfig):
         first_k_dense_replace=1,
         norm_topk_prob=True,
         use_qk_norm=False,
-        use_grouped_mm=False,
+        use_grouped_mm=True,
         **kwargs,
     ):
         self.vocab_size = vocab_size
@@ -249,9 +257,6 @@ class Glm4MoeConfig(PretrainedConfig):
             tie_word_embeddings=tie_word_embeddings,
             **kwargs,
         )
-
-
-__all__ = ["Glm4MoeConfig"]
 
 
 def repeat_kv(hidden_states: torch.Tensor, n_rep: int) -> torch.Tensor:
@@ -374,6 +379,8 @@ class Glm4MoeAttention(nn.Module):
         attention_mask: Optional[torch.Tensor],
         past_key_values: Optional[Cache] = None,
         cache_position: Optional[torch.LongTensor] = None,
+        cu_seqlens: Optional[torch.LongTensor] = None,
+        max_seqlen: Optional[int] = None,
         **kwargs: Unpack[FlashAttentionKwargs],
     ) -> tuple[torch.Tensor, Optional[torch.Tensor]]:
         input_shape = hidden_states.shape[:-1]
@@ -399,11 +406,33 @@ class Glm4MoeAttention(nn.Module):
             cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
-        key_states = key_states.repeat_interleave(self.num_key_value_groups, dim=1)
-        value_states = value_states.repeat_interleave(self.num_key_value_groups, dim=1)
-        out = F.scaled_dot_product_attention(query_states, key_states, value_states, is_causal=True)
-        out = out.transpose(1, 2).contiguous()  # .view(out.shape[0], out.shape[1], -1)
-        attn_output = out.view(out.shape[0], out.shape[1], -1)
+        if self.config._attn_implementation == "flash_attention_2":
+            # TODO: Can we optimize the rotary applicaiton instead of double transpose?
+            query_states = query_states.transpose(1, 2)
+            key_states = key_states.transpose(1, 2)
+            value_states = value_states.transpose(1, 2)
+            out = flash_attn_varlen_func(
+                query_states[0],
+                key_states[0],
+                value_states[0],
+                cu_seqlens,
+                cu_seqlens,
+                max_seqlen,
+                max_seqlen,
+                causal=True,
+            )
+            out = out.contiguous()
+            attn_output = out.view(1, out.shape[0], -1)
+        elif self.config._attn_implementation == "sdpa":
+            key_states = key_states.repeat_interleave(self.num_key_value_groups, dim=1)
+            value_states = value_states.repeat_interleave(self.num_key_value_groups, dim=1)
+            out = F.scaled_dot_product_attention(query_states, key_states, value_states, is_causal=True)
+            out = out.transpose(1, 2).contiguous()  # .view(out.shape[0], out.shape[1], -1)
+            attn_output = out.view(out.shape[0], out.shape[1], -1)
+        else:
+            raise NotImplementedError(
+                f"Only flash_attention_2 and sdpa are supported for custom glm4_moe for now not {self.config._attn_implementation}"
+            )
         attn_weights = None
 
         # attn_output = attn_output.reshape(*input_shape, -1).contiguous()
@@ -585,6 +614,8 @@ class Glm4MoeDecoderLayer(GradientCheckpointingLayer):
         use_cache: Optional[bool] = False,
         cache_position: Optional[torch.LongTensor] = None,
         position_embeddings: Optional[tuple[torch.Tensor, torch.Tensor]] = None,  # necessary, but kept here for BC
+        cu_seqlens: Optional[torch.LongTensor] = None,
+        max_seqlen: Optional[int] = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> torch.Tensor:
         residual = hidden_states
@@ -598,6 +629,8 @@ class Glm4MoeDecoderLayer(GradientCheckpointingLayer):
             use_cache=use_cache,
             cache_position=cache_position,
             position_embeddings=position_embeddings,
+            cu_seqlens=cu_seqlens,
+            max_seqlen=max_seqlen,
             **kwargs,
         )
         hidden_states = residual + hidden_states
@@ -720,14 +753,30 @@ class Glm4MoeModel(Glm4MoePreTrainedModel):
         if position_ids is None:
             position_ids = cache_position.unsqueeze(0)
 
-        causal_mask = create_causal_mask(
-            config=self.config,
-            input_embeds=inputs_embeds,
-            attention_mask=attention_mask,
-            cache_position=cache_position,
-            past_key_values=past_key_values,
-            position_ids=position_ids,
-        )
+        if self.config._attn_implementation == "flash_attention_2":
+            flat_position_ids = position_ids.view(-1)
+            seqlens = torch.cat(
+                [
+                    flat_position_ids[0:1],
+                    flat_position_ids[:-1][(flat_position_ids == 0)[1:]] + 1,
+                    flat_position_ids[-1:] + 1,
+                ]
+            )
+            max_seqlen = seqlens.max().item()
+            cu_seqlens = seqlens.cumsum(dim=0, dtype=torch.int32)
+            torch._dynamo.mark_dynamic(cu_seqlens, 0)
+            causal_mask = None
+        else:
+            max_seqlen = None
+            cu_seqlens = None
+            causal_mask = create_causal_mask(
+                config=self.config,
+                input_embeds=inputs_embeds,
+                attention_mask=attention_mask,
+                cache_position=cache_position,
+                past_key_values=past_key_values,
+                position_ids=position_ids,
+            )
 
         hidden_states = inputs_embeds
         position_embeddings = self.rotary_emb(hidden_states, position_ids)
@@ -740,6 +789,8 @@ class Glm4MoeModel(Glm4MoePreTrainedModel):
                 past_key_values=past_key_values,
                 cache_position=cache_position,
                 position_embeddings=position_embeddings,
+                cu_seqlens=cu_seqlens,
+                max_seqlen=max_seqlen,
                 **kwargs,
             )
 
@@ -761,11 +812,6 @@ class Glm4MoeForCausalLM(Glm4MoePreTrainedModel, GenerationMixin):
         self.model = Glm4MoeModel(config)
         self.vocab_size = config.vocab_size
         self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
-
-        if config._attn_implementation != "sdpa":
-            raise NotImplementedError(
-                f"Only sdpa is supported for custom llama for now not {config._attn_implementation}"
-            )
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -802,8 +848,6 @@ class Glm4MoeForCausalLM(Glm4MoePreTrainedModel, GenerationMixin):
         >>> tokenizer.batch_decode(generate_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
         "Hey, are you conscious? Can you talk to me?\nI'm not conscious, but I can talk to you."
         ```"""
-        if position_ids is not None:
-            warnings.warn("Position IDs are ignored for custom glm4_moe for now")
 
         outputs: BaseModelOutputWithPast = self.model(
             input_ids=input_ids,
@@ -834,4 +878,4 @@ class Glm4MoeForCausalLM(Glm4MoePreTrainedModel, GenerationMixin):
         )
 
 
-__all__ = ["Glm4MoePreTrainedModel", "Glm4MoeModel", "Glm4MoeForCausalLM"]
+__all__ = ["Glm4MoeConfig", "Glm4MoePreTrainedModel", "Glm4MoeModel", "Glm4MoeForCausalLM"]
