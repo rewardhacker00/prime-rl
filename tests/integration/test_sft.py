@@ -33,7 +33,7 @@ def wandb_project(username: str) -> str:
 
 @pytest.fixture(scope="module")
 def sft_process(
-    run_process: Callable[[Command, Environment], ProcessResult],
+    run_process: Callable[[Command, Environment, int], ProcessResult],
     output_dir: Path,
     wandb_project: str,
     branch_name: str,
@@ -82,6 +82,25 @@ def sft_resume_process(
     )
 
 
+SFT_CMD_MOE = ["uv", "run", "sft", "@", "configs/debug/moe/sft/train.toml"]
+
+
+@pytest.fixture
+def sft_moe_process(
+    run_process: Callable[[Command, Environment, int], ProcessResult],
+    output_dir: Path,
+) -> ProcessResult:
+    return run_process(
+        SFT_CMD_MOE
+        + [
+            "--output-dir",
+            output_dir.as_posix(),
+        ],
+        ENV,
+        TIMEOUT,
+    )
+
+
 def test_no_error(sft_process: ProcessResult):
     assert sft_process.returncode == 0, f"SFT process failed with return code {sft_process.returncode}"
 
@@ -92,31 +111,5 @@ def test_no_error_resume(sft_resume_process: ProcessResult):
     )
 
 
-SFT_CMD_MOE = ["uv", "run", "sft", "@", "configs/debug/moe/sft/train.toml"]
-
-
-def test_sft_moe(
-    run_process: Callable[[Command, Environment], ProcessResult],
-    output_dir: Path,
-    wandb_project: str,
-    branch_name: str,
-    commit_hash: str,
-) -> ProcessResult:
-    wandb_name = f"{branch_name}-{commit_hash}"
-
-    assert (
-        run_process(
-            SFT_CMD_MOE
-            + [
-                "--wandb.project",
-                wandb_project,
-                "--wandb.name",
-                wandb_name,
-                "--output-dir",
-                output_dir.as_posix(),
-            ],
-            ENV,
-            TIMEOUT,
-        ).returncode
-        == 0
-    ), f"SFT  mpeprocess failed with return code {sft_process.returncode}"
+def test_no_error_moe(sft_moe_process: ProcessResult):
+    assert sft_moe_process.returncode == 0, f"SFT MOE process failed with return code {sft_moe_process.returncode}"
