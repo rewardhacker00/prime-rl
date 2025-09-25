@@ -398,7 +398,6 @@ def rl(config: RLConfig):
     ckpt_dir = get_ckpt_dir(config.output_dir)
     weights_dir = get_weights_dir(config.output_dir)
     rollout_dir = get_rollout_dir(config.output_dir)
-    log_dir.mkdir(parents=True, exist_ok=True)
 
     # Clean up directories if specified
     if config.clean:
@@ -516,8 +515,6 @@ def rl(config: RLConfig):
             # Pipe all logs to file, and only master rank logs to stdout
             f"--log-dir={config.output_dir / 'torchrun'}",
             "--local-ranks-filter=0",
-            "--redirects=3",
-            "--tee=3",
             f"--nproc-per-node={len(config.trainer_gpu_ids)}",
             "-m",
             "prime_rl.trainer.rl.train",
